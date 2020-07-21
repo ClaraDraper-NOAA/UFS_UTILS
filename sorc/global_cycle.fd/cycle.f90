@@ -87,6 +87,7 @@
 !                         Added processing of NSST and TREF update.
 !                         Added mpi directives.
 !----------------------------------------------------------------------
+ USE M_Snow_Analysis
 
  IMPLICIT NONE
 !
@@ -98,7 +99,11 @@
  INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS
  REAL    :: FH, DELTSFC, ZSEA1, ZSEA2
  LOGICAL :: USE_UFO, DO_NSST, ADJT_NST_ONLY
-!
+
+ ! 4.8.20 snow analyis: SWE, snow depth, snow density
+ REAL, ALLOCATABLE         :: SNOANL(:)    !, SWDANL(LENSFC), SNWDEN(LENSFC), anl_fSCA(LENSFC)
+ !Integer				     :: s_assm_hour
+
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
@@ -133,13 +138,21 @@
  READ(36, NML=NAMCYC)
  IF (MYRANK==0) WRITE(6,NAMCYC)
 
+ LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
+ ALLOCATE(SNOANL(LENSFC))
+ CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
+
+ ! snow analysis with OI DA
+ ! s_assm_hour =18
+ ! if (IH == s_assm_hour) then
+ Call Snow_Analysis(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, SNOANL)
+ !
+
  IF (MAX_TASKS < 99999 .AND. MYRANK > (MAX_TASKS - 1)) THEN
    PRINT*,"USER SPECIFIED MAX NUMBER OF TASKS: ", MAX_TASKS
    PRINT*,"WILL NOT RUN CYCLE PROGRAM ON RANK: ", MYRANK
    GOTO 333
  ENDIF
-
- LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ZSEA1 = FLOAT(ZSEA1_MM) / 1000.0  ! CONVERT FROM MM TO METERS
  ZSEA2 = FLOAT(ZSEA2_MM) / 1000.0
@@ -157,12 +170,15 @@
  CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
-             ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK)
+             ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
+             SNOANL)  ! analysis SWE and Depth from surface_cycle
  
  PRINT*
  PRINT*,'CYCLE PROGRAM COMPLETED NORMALLY ON RANK: ', MYRANK
 
  333 CONTINUE
+
+ DEALLOCATE(SNOANL)
 
  CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
 
@@ -180,7 +196,8 @@
  SUBROUTINE SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
                    IY,IM,ID,IH,FH,IALB,                  &
                    USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
-                   ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK)
+                   ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
+                   SNOANL)  ! analysis SWE and Depth from surface_cycle
 !
  USE READ_WRITE_DATA
  USE M_Snow_Analysis
@@ -236,6 +253,12 @@
 
  TYPE(NSST_DATA)     :: NSST
 
+<<<<<<< Updated upstream
+=======
+ ! 4.8.20 snow analyis: SWE, snow depth, snow density
+ REAL                :: SNOANL(LENSFC)
+
+>>>>>>> Stashed changes
 !--------------------------------------------------------------------------------
 ! GSI_FILE is the path/name of the gaussian GSI file which contains NSST
 ! increments.
@@ -436,6 +459,7 @@
 
  IF (.NOT. ADJT_NST_ONLY) THEN
    PRINT*
+<<<<<<< Updated upstream
    PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."
    
 ! snow analysis with OI DA
@@ -453,6 +477,9 @@
   !     SWDFCS = SWDANL
   !  endif
               
+=======
+   PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."          
+>>>>>>> Stashed changes
 
    CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,          &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
