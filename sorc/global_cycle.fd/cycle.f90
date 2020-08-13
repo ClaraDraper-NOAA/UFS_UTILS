@@ -200,7 +200,6 @@
                    SNOANL)  ! analysis SWE and Depth from surface_cycle
 !
  USE READ_WRITE_DATA
- USE M_Snow_Analysis
 
  IMPLICIT NONE
 
@@ -247,18 +246,11 @@
  REAL                :: SIG1T(LENSFC)
  REAL, ALLOCATABLE   :: SLIFCS_FG(:)
 
- ! 4.8.20 snow analyis: SWE, snow depth, snow density
- REAL                :: SNOANL(LENSFC), SWDANL(LENSFC), SNWDEN(LENSFC), anl_fSCA(LENSFC)
- Integer				     :: s_assm_hour
-
  TYPE(NSST_DATA)     :: NSST
 
-<<<<<<< Updated upstream
-=======
  ! 4.8.20 snow analyis: SWE, snow depth, snow density
  REAL                :: SNOANL(LENSFC)
 
->>>>>>> Stashed changes
 !--------------------------------------------------------------------------------
 ! GSI_FILE is the path/name of the gaussian GSI file which contains NSST
 ! increments.
@@ -459,27 +451,7 @@
 
  IF (.NOT. ADJT_NST_ONLY) THEN
    PRINT*
-<<<<<<< Updated upstream
-   PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."
-   
-! snow analysis with OI DA
-   s_assm_hour =18
-! if (IH == s_assm_hour) then
-    Call Snow_Analysis(RLA, RLO, OROG, MYRANK, IDIM, JDIM, &
-                  IY, IM, ID, IH, &
-                  TILE_NUM,         &
-                  LENSFC,	 		&
-                  SNOFCS, SWDFCS,  &
-                  SNWDEN, VETFCS,       &
-                  SNOANL, SWDANL, anl_fSCA)
-  ! ! replace snow analysis arrays with analyis
-  !     SNOFCS = SNOANL
-  !     SWDFCS = SWDANL
-  !  endif
-              
-=======
    PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."          
->>>>>>> Stashed changes
 
    CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,          &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
