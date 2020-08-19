@@ -39,7 +39,8 @@
      &,                   vegfcs,vetfcs,sotfcs,alffcs
      &,                   cvfcs,cvbfcs,cvtfcs,me,nlunit
      &,                   sz_nml,input_nml_file
-     &,                   ialb,isot,ivegsrc,tile_num_ch,i_index,j_index)
+     &,                   ialb,isot,ivegsrc,tile_num_ch,i_index,j_index
+     &,                   snoanl_oida)  ! 6.2.20 snoanl_oida: use analysis from OI DA
 !
       use machine , only : kind_io8,kind_io4
       use sfccyc_module
@@ -463,7 +464,7 @@
 !
 !  predicted surface fields (last characters 'fcs' indicates forecast)
 !
-      real (kind=kind_io8) tsffcs(len), wetfcs(len),   snofcs(len),
+      real (kind=kind_io8) tsffcs(len), wetfcs(len), snofcs(len),
      &     zorfcs(len), albfcs(len,4), aisfcs(len),
      &     tg3fcs(len), acnfcs(len),   cnpfcs(len),
      &     cvfcs (len), cvbfcs(len),   cvtfcs(len),
@@ -473,6 +474,7 @@
      &,    sihfcs(len), sicfcs(len), sitfcs(len)
      &,    vmnfcs(len), vmxfcs(len), slpfcs(len), absfcs(len)
      &,    swdfcs(len), slcfcs(len,lsoil)
+     &,    snoanl_oida(len)  ! 6.2.20:   snoanl_oida: use analysis from OI DA
 !
 ! ratio of sigma level 1 wind and 10m wind (diagnozed by model and not touched
 ! in this program).
@@ -1415,6 +1417,12 @@
      &,          irtvmn,irtvmx,irtslp,irtabs, 
      &           imsk, jmsk, slmskh, rla, rlo, gausm, blnmsk, bltmsk
      &,          me, lanom)
+! 6.2.20: use snoanl from OI DA 
+      snoanl = snoanl_oida
+      irtsno = 0 
+      irtscv = 0
+      csnol = 0
+
 !     if(lprnt) print *,' tsfanl=',tsfanl(iprnt)
 !
 !  scale zor and alb to match forecast model units
@@ -1544,7 +1552,8 @@
 !  quality control of snow and sea-ice
 !    process snow depth or snow cover
 !
-      if(fnsnoa(1:8).ne.'        ') then
+!##### 6.2.20: commented out below (1556 & 1574-1590) as there is always analysis 
+!      if(fnsnoa(1:8).ne.'        ') then
         call setzro(snoanl,epssno,len)
         call qcsnow(snoanl,slmask,aisanl,glacir,len,ten,landice,me)
         if (.not.landice) then
@@ -1561,23 +1570,24 @@
      &              scvlmx,scvlmn,scvomx,scvomn,scvimx,scvimn,
      &              scvjmx,scvjmn,scvsmx,scvsmn,epsscv,
      &              rla,rlo,len,kqcm,percrit,lgchek,me)
-      else
-        crit=0.5
-        call rof01(scvanl,len,'ge',crit)
-        call qcsnow(scvanl,slmask,aisanl,glacir,len,one,landice,me)
-        call qcmxmn('sncva   ',scvanl,slianl,scvanl,icefl1,
-     &              scvlmx,scvlmn,scvomx,scvomn,scvimx,scvimn,
-     &              scvjmx,scvjmn,scvsmx,scvsmn,epsscv,
-     &              rla,rlo,len,kqcm,percrit,lgchek,me)
-        call snodpth(scvanl,slianl,tsfanl,snoclm,
-     &               glacir,snwmax,snwmin,landice,len,snoanl,me)
-        call qcsnow(scvanl,slmask,aisanl,glacir,len,snosmx,landice,me)
-        call snosfc(snoanl,tsfanl,tsfsmx,len,me)
-        call qcmxmn('snowa   ',snoanl,slianl,snoanl,icefl1,
-     &              snolmx,snolmn,snoomx,snoomn,snoimx,snoimn,
-     &              snojmx,snojmn,snosmx,snosmn,epssno,
-     &              rla,rlo,len,kqcm,percrit,lgchek,me)
-      endif
+!##### 6.2.20: commented out below (1574 to 1590) as there is always analysis 
+    !   else
+    !     crit=0.5
+    !     call rof01(scvanl,len,'ge',crit)
+    !     call qcsnow(scvanl,slmask,aisanl,glacir,len,one,landice,me)
+    !     call qcmxmn('sncva   ',scvanl,slianl,scvanl,icefl1,
+    !  &              scvlmx,scvlmn,scvomx,scvomn,scvimx,scvimn,
+    !  &              scvjmx,scvjmn,scvsmx,scvsmn,epsscv,
+    !  &              rla,rlo,len,kqcm,percrit,lgchek,me)
+    !     call snodpth(scvanl,slianl,tsfanl,snoclm,
+    !  &               glacir,snwmax,snwmin,landice,len,snoanl,me)
+    !     call qcsnow(scvanl,slmask,aisanl,glacir,len,snosmx,landice,me)
+    !     call snosfc(snoanl,tsfanl,tsfsmx,len,me)
+    !     call qcmxmn('snowa   ',snoanl,slianl,snoanl,icefl1,
+    !  &              snolmx,snolmn,snoomx,snoomn,snoimx,snoimn,
+    !  &              snojmx,snojmn,snosmx,snosmn,epssno,
+    !  &              rla,rlo,len,kqcm,percrit,lgchek,me)
+    !   endif
 !
       do i=1,len
         icefl2(i) = sicanl(i) .gt. 0.99999
