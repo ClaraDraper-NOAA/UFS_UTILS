@@ -46,7 +46,8 @@
      &,                   vegfcs,vetfcs,sotfcs,alffcs
      &,                   cvfcs,cvbfcs,cvtfcs,me,nlunit
      &,                   sz_nml,input_nml_file
-     &,                   ialb,isot,ivegsrc,tile_num_ch,i_index,j_index)
+     &,                   ialb,isot,ivegsrc,tile_num_ch,i_index
+     &,                   j_index,snow_OI_type,snoanl_in) 
 !
       use machine , only : kind_io8,kind_io4
       use sfccyc_module
@@ -54,6 +55,10 @@
       character(len=*), intent(in) :: tile_num_ch
       integer,intent(in)           :: i_index(len), j_index(len)
       logical use_ufo, nst_anl
+      ! snow OI inputs
+      integer, intent(in) ::  snow_OI_type
+      real (kind=kind_io8), intent(in), optional :: snoanl_in(len) 
+
       real (kind=kind_io8) sllnd,slsea,aicice,aicsea,tgice,rlapse,
      &                     orolmx,orolmn,oroomx,oroomn,orosmx,
      &                     orosmn,oroimx,oroimn,orojmx,orojmn,
@@ -910,13 +915,18 @@
         if(faiss.ge.99999.) caiss=1.
         if((faiss.gt.0.).and.(faiss.lt.99999))  caiss=1.
 !
-        csnol=0.                       !...  snow over land
-        if(fsnol.ge.99999.) csnol=1.
-        if((fsnol.gt.0.).and.(fsnol.lt.99999))  csnol=exp(-deltf/fsnol)
-!       using the same way to bending snow as narr when fsnol is the negative value
-!       the magnitude of fsnol is the thread to determine the lower and upper bound
-!       of final swe
-        if(fsnol.lt.0.)csnol=fsnol
+        if (snow_OI_type .eq. 0) then  ! not using snow OI
+         csnol=0.                       !...  snow over land
+         if(fsnol.ge.99999.) csnol=1.
+         if((fsnol.gt.0.).and.(fsnol.lt.99999))  csnol=exp(-deltf/fsnol)
+        !       using the same way to bending snow as narr when fsnol is the negative value
+        !       the magnitude of fsnol is the thread to determine the lower and upper bound
+        !       of final swe
+         if(fsnol.lt.0.)csnol=fsnol
+        else ! snow OI - use all of the snoanl_in
+         csnol = 0. 
+         fsnol = 0.
+        endif
 !
         csnos=0.                       !...  snow over sea
         if(fsnos.ge.99999.) csnos=1.
@@ -1468,27 +1478,52 @@
 !
 !  read analysis fields
 !
-      call analy(lugb,iy,im,id,ih,fh,len,lsoil,slmask, 
-     &           snow_obs_type,
-     &           fntsfa,fnweta,fnsnoa,fnzora,fnalba,fnaisa,
-     &           fntg3a,fnscva,fnsmca,fnstca,fnacna,fnvega,
-     &           fnveta,fnsota,
-     &           fnvmna,fnvmxa,fnslpa,fnabsa,      
-     &           tsfanl,wetanl,sweanl,sndanl,zoranl,albanl,aisanl,
-     &           tg3anl,cvanl ,cvbanl,cvtanl,
-     &           smcanl,stcanl,slianl,scvanl,acnanl,veganl,
-     &           vetanl,sotanl,alfanl,tsfan0,
-     &           vmnanl,vmxanl,slpanl,absanl,      
-     &           kpdtsf,kpdwet,kpdswe,kpdsnd,kpdzor,kpdalb,kpdais,
-     &           kpdtg3,kpdscv,kpdacn,kpdsmc,kpdstc,kpdveg,
-     &           kpdvet,kpdsot,kpdalf,
-     &           kpdvmn,kpdvmx,kpdslp,kpdabs,      
-     &           irttsf,irtwet,irtsno,irtzor,irtalb,irtais,
-     &           irttg3,irtscv,irtacn,irtsmc,irtstc,irtveg,
-     &           irtvet,irtsot,irtalf
-     &,          irtvmn,irtvmx,irtslp,irtabs, 
-     &           imsk, jmsk, slmskh, rla, rlo, gausm, blnmsk, bltmsk
-     &,          me, lanom)
+
+      if (snow_OI_type .gt. 0) then
+          call analy(lugb,iy,im,id,ih,fh,len,lsoil,slmask, 
+     &        snow_obs_type, snow_OI_type, 
+     &        fntsfa,fnweta,fnsnoa,fnzora,fnalba,fnaisa,
+     &        fntg3a,fnscva,fnsmca,fnstca,fnacna,fnvega,
+     &        fnveta,fnsota,
+     &        fnvmna,fnvmxa,fnslpa,fnabsa,      
+     &        tsfanl,wetanl,sweanl,sndanl,zoranl,albanl,aisanl,
+     &        tg3anl,cvanl ,cvbanl,cvtanl,
+     &        smcanl,stcanl,slianl,scvanl,acnanl,veganl,
+     &        vetanl,sotanl,alfanl,tsfan0,
+     &        vmnanl,vmxanl,slpanl,absanl,      
+     &        kpdtsf,kpdwet,kpdswe,kpdsnd,kpdzor,kpdalb,kpdais,
+     &        kpdtg3,kpdscv,kpdacn,kpdsmc,kpdstc,kpdveg,
+     &        kpdvet,kpdsot,kpdalf,
+     &        kpdvmn,kpdvmx,kpdslp,kpdabs,      
+     &        irttsf,irtwet,irtsno,irtzor,irtalb,irtais,
+     &        irttg3,irtscv,irtacn,irtsmc,irtstc,irtveg,
+     &        irtvet,irtsot,irtalf, 
+     &        irtvmn,irtvmx,irtslp,irtabs, 
+     &        imsk, jmsk, slmskh, rla, rlo, gausm, blnmsk, bltmsk, 
+     &        me, lanom, snoanl_in)
+       else
+          call analy(lugb,iy,im,id,ih,fh,len,lsoil,slmask, 
+     &        snow_obs_type, snow_OI_type, 
+     &        fntsfa,fnweta,fnsnoa,fnzora,fnalba,fnaisa,
+     &        fntg3a,fnscva,fnsmca,fnstca,fnacna,fnvega,
+     &        fnveta,fnsota,
+     &        fnvmna,fnvmxa,fnslpa,fnabsa,      
+     &        tsfanl,wetanl,sweanl,sndanl,zoranl,albanl,aisanl,
+     &        tg3anl,cvanl ,cvbanl,cvtanl,
+     &        smcanl,stcanl,slianl,scvanl,acnanl,veganl,
+     &        vetanl,sotanl,alfanl,tsfan0,
+     &        vmnanl,vmxanl,slpanl,absanl,      
+     &        kpdtsf,kpdwet,kpdswe,kpdsnd,kpdzor,kpdalb,kpdais,
+     &        kpdtg3,kpdscv,kpdacn,kpdsmc,kpdstc,kpdveg,
+     &        kpdvet,kpdsot,kpdalf,
+     &        kpdvmn,kpdvmx,kpdslp,kpdabs,      
+     &        irttsf,irtwet,irtsno,irtzor,irtalb,irtais,
+     &        irttg3,irtscv,irtacn,irtsmc,irtstc,irtveg,
+     &        irtvet,irtsot,irtalf, 
+     &        irtvmn,irtvmx,irtslp,irtabs, 
+     &        imsk, jmsk, slmskh, rla, rlo, gausm, blnmsk, bltmsk, 
+     &        me, lanom)
+      endif
 !     if(lprnt) print *,' tsfanl=',tsfanl(iprnt)
 !
 !  scale zor and alb to match forecast model units
@@ -1648,7 +1683,7 @@
 !  quality control of snow water equivalent and sea-ice
 !    process snow water equivalent or snow cover
 !
-      if(fnsnoa(1:8).ne.'        ') then
+      if( (fnsnoa(1:8).ne.'        ') .or. (snow_OI_type .gt. 0) )  then
         if (snow_obs_type .gt. 1) then  ! using sweanl
             call setzro(sweanl,epsswe,len)
             call qcsnow(sweanl,slmask,aisanl,glacir,len,ten,landice,me)
@@ -4029,7 +4064,7 @@
       return
       end
       subroutine analy(lugb,iy,im,id,ih,fh,len,lsoil,slmask,
-     &                 snow_obs_type, 
+     &                 snow_obs_type, snow_OI_type, 
      &                 fntsfa,fnweta,fnsnoa,fnzora,fnalba,fnaisa,
      &                 fntg3a,fnscva,fnsmca,fnstca,fnacna,fnvega,
      &                 fnveta,fnsota,
@@ -4054,10 +4089,11 @@
 !clu [+1l] add irt() for vmn, vmx, slp, abs
      &,                irtvmn,irtvmx,irtslp,irtabs
      &,                imsk, jmsk, slmskh, outlat, outlon
-     &,                gaus, blno, blto, me, lanom)
+     &,                gaus, blno, blto, me, lanom, snoanl_in) 
       use machine , only : kind_io8,kind_io4
       use sfccyc_module, only :  pre2020_snowDA
       implicit none
+      real (kind=kind_io8), intent(in), optional :: snoanl_in(len)
       logical  lanom
       integer irtsmc,irtacn,irtstc,irtvet,irtveg,irtscv,irtzor,irtsno,
      &        irtalb,irttg3,irtais,iret,me,kk,kpdvet,i,irtalf,irtsot,
@@ -4068,7 +4104,7 @@
      &        kpdais,kpdzor,kpdtg3,kpdacn,kpdscv,j,
 !clu [+1l] add kpd() and irt() for vmn, vmx, slp, abs
      &        kpdvmn,kpdvmx,kpdslp,kpdabs,irtvmn,irtvmx,irtslp,irtabs, 
-     &        snow_obs_type
+     &        snow_obs_type, snow_OI_type
       real (kind=kind_io8) blto,blno,fh
 !
       real (kind=kind_io8)    slmask(len)
@@ -4270,107 +4306,128 @@
       irtscv=0
       snow_obs_type=0
 
-      if(fnsnoa(1:8).ne.'        ') then
-        do i=1,len
-          scvanl(i)=0.
-        enddo
-!cggg snow mods start
-!cggg need to determine if the snow data is on the gaussian grid
-!cggg or not.  if gaussian, then data is a snow depth, not snow water equiv
-!cggg if not gaussian, then data is from hua-lu's
-!cggg program and is swe  need to communicate
-!cggg this to routine fixrda via the 3rd argument which is
-!cggg the grib parameter id number.
-        call baopenr(lugb,fnsnoa,iret)
-        if (iret .ne. 0) then
-          write(6,*) ' error in opening file ',trim(fnsnoa)
-          print *,'error in opening file ',trim(fnsnoa)
-          call abort
-        endif
-        lugi=0
-        lskip=-1
-        jpds=-1
-        jgds=-1
-        kpds=jpds
-        call getgbh(lugb,lugi,lskip,jpds,jgds,lgrib,ndata,
+      if (snow_OI_type .gt. 0 ) then 
+      ! using the OI analysis. Analysis provided as input argument
+      ! needs to be coppied to the correct variable      
+          snow_obs_type = snow_OI_type
+          if (me .eq. 0) then
+              write(6,*) 'snowDA: using OI analysis' 
+          endif 
+          if (snow_obs_type ==1 ) then 
+              write(6,*) 'snowDA: analysis performed on snow depth' 
+              sndanl = snoanl_in
+          elseif (snow_obs_type ==2) then
+              write(6,*) 'snowDA: analysis performed on SWE' 
+              sweanl = snoanl_in
+           else
+              write(6,*) 'snowDA: invalid snow_OI_type, aborting' 
+              call abort
+           endif
+
+      else
+          if(fnsnoa(1:8).ne.'        ') then
+            do i=1,len
+              scvanl(i)=0.
+            enddo
+        !cggg snow mods start
+        !cggg need to determine if the snow data is on the gaussian grid
+        !cggg or not.  if gaussian, then data is a snow depth, not snow water equiv
+        !cggg if not gaussian, then data is from hua-lu's
+        !cggg program and is swe  need to communicate
+        !cggg this to routine fixrda via the 3rd argument which is
+        !cggg the grib parameter id number.
+            call baopenr(lugb,fnsnoa,iret)
+            if (iret .ne. 0) then
+              write(6,*) ' error in opening file ',trim(fnsnoa)
+              print *,'error in opening file ',trim(fnsnoa)
+              call abort
+            endif
+            lugi=0
+            lskip=-1
+            jpds=-1
+            jgds=-1
+            kpds=jpds
+            call getgbh(lugb,lugi,lskip,jpds,jgds,lgrib,ndata,
      &              lskip,kpds,kgds,iret)
-        close(lugb)
-        if (iret .ne. 0) then
-          write(6,*) ' error reading header of file: ',trim(fnsnoa)
-          print *,'error reading header of file: ',trim(fnsnoa)
-          call abort
-        endif
-        if (kgds(1) == 4) then  ! gaussian data is depth
-          call fixrda(lugb,fnsnoa,kpdsnd,slmask,
+            close(lugb)
+            if (iret .ne. 0) then
+              write(6,*) ' error reading header of file: ' 
+     &              ,trim(fnsnoa)
+              print *,'error reading header of file: ',trim(fnsnoa)
+              call abort
+            endif
+            if (kgds(1) == 4) then  ! gaussian data is depth
+              call fixrda(lugb,fnsnoa,kpdsnd,slmask,
      &                iy,im,id,ih,fh,sndanl,len,iret
      &,               imsk, jmsk, slmskh, gaus,blno, blto
      &,               outlat, outlon, me)
-          if (pre2020_snowDA == .true. ) then
-              snow_obs_type=3
-              sweanl=sndanl*100.  ! convert from meters to liq. eq.
-                                  ! depth in mm using 10:1 ratio   
-              if (me==0) 
+              if (pre2020_snowDA == .true. ) then
+                  snow_obs_type=3
+                  sweanl=sndanl*100.  ! convert from meters to liq. eq.
+                                      ! depth in mm using 10:1 ratio   
+                  if (me==0) 
      &     write(6,*) 'snowDA: read in gaussian snow depth observations'
      &,                'snowDA: converted to SWE using density = 0.1'
-          else 
-              snow_obs_type=1
-              if (me==0) 
+              else 
+                  snow_obs_type=1
+                  if (me==0) 
      &     write(6,*) 'snowDA: read in gaussian snow depth observations'
-              sndanl = sndanl*1000.  ! m in mm.
-          endif
-        else                    ! lat/lon data is liq equv. depth
-          snow_obs_type=2
-          call fixrda(lugb,fnsnoa,kpdswe,slmask,
+                  sndanl = sndanl*1000.  ! m in mm.
+              endif
+            else                    ! lat/lon data is liq equv. depth
+              snow_obs_type=2
+              call fixrda(lugb,fnsnoa,kpdswe,slmask,
      &                iy,im,id,ih,fh,sweanl,len,iret
      &,               imsk, jmsk, slmskh, gaus,blno, blto
      &,               outlat, outlon, me)
-          if (me==0) 
+              if (me==0) 
      &    write(6,*) 'snowDA: read in pre-gaussian (?) SWE observations'
-        endif
-!cggg snow mods end
-        irtscv=iret
-! CSD - fairly sure these all refer to SWE, not snow depth
-        if(iret.eq.1) then
-          write(6,*) 'swe analysis read error'
-          call abort
-        elseif(iret.eq.-1) then
-          if (me .eq. 0) then
-          print *,'old swe analysis provided, indicating proper',
+            endif
+        !cggg snow mods end
+            irtscv=iret
+        ! CSD - fairly sure these all refer to SWE, not snow depth
+            if(iret.eq.1) then
+              write(6,*) 'swe analysis read error'
+              call abort
+            elseif(iret.eq.-1) then
+              if (me .eq. 0) then
+              print *,'old swe analysis provided, indicating proper',
      &            ' file name is given.  no error suspected.'
-          write(6,*) 'forecast guess will be used'
-          endif
-        else
-          if (me .eq. 0) print *,'snow depth or swe  analysis provided.'
-        endif
-        irtsno=0
-      elseif(fnscva(1:8).ne.'        ') then
-        do i=1,len
-          sweanl(i)=0.
-        enddo
-        call fixrda(lugb,fnscva,kpdscv,slmask,
+              write(6,*) 'forecast guess will be used'
+              endif
+            else
+              if (me .eq. 0) print *,'snow depth or swe anal provided.'
+            endif
+            irtsno=0
+          elseif(fnscva(1:8).ne.'        ') then
+            do i=1,len
+              sweanl(i)=0.
+            enddo
+            call fixrda(lugb,fnscva,kpdscv,slmask,
      &             iy,im,id,ih,fh,scvanl,len,iret
      &,            imsk, jmsk, slmskh, gaus,blno, blto
      &,            outlat, outlon, me)
-        irtsno=iret
-        if(iret.eq.1) then
-          write(6,*) 'snow cover analysis read error'
-          call abort
-        elseif(iret.eq.-1) then
-          if (me .eq. 0) then
-          print *,'old snow cover analysis provided, indicating proper',
-     &            ' file name is given.  no error suspected.'
-          write(6,*) 'forecast guess will be used'
+            irtsno=iret
+            if(iret.eq.1) then
+              write(6,*) 'snow cover analysis read error'
+              call abort
+            elseif(iret.eq.-1) then
+              if (me .eq. 0) then
+              print *,'old snow cover analysis provided, indicating ', 
+     &            ' proper file name is given.  no error suspected.'
+              write(6,*) 'forecast guess will be used'
+              endif
+            else
+              if (me .eq. 0) print *,'snow cover analysis provided.'
+            endif
+          else
+            if (me .eq. 0) then
+        !       print *,'************************************************'
+            print *,'no snow depth/swe, or snocov analysis available'
+            print *, 'climatology used'
+            endif
           endif
-        else
-          if (me .eq. 0) print *,'snow cover analysis provided.'
-        endif
-      else
-        if (me .eq. 0) then
-!       print *,'************************************************'
-        print *,'no snow depth/swe, or snocov analysis available'
-        print *, 'climatology used'
-        endif
-      endif
+      endif 
 !
 !  sea ice mask
 !

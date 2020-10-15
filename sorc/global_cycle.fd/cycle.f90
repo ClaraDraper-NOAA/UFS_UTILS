@@ -87,6 +87,7 @@
 !                         Added processing of NSST and TREF update.
 !                         Added mpi directives.
 !----------------------------------------------------------------------
+ USE M_Snow_Analysis
 
  IMPLICIT NONE
 !
@@ -95,19 +96,29 @@
  CHARACTER(LEN=3) :: DONST
  INTEGER :: IDIM, JDIM, LSOIL, LUGB, IY, IM, ID, IH, IALB
  INTEGER :: ISOT, IVEGSRC, LENSFC, ZSEA1_MM, ZSEA2_MM, IERR
- INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS
+ INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_IO_TYPE
  REAL    :: FH, DELTSFC, ZSEA1, ZSEA2
  LOGICAL :: USE_UFO, DO_NSST, ADJT_NST_ONLY
-!
+! SNOW_IO_TYPE controls the OI of snow obs. 
+! 0  - no OI of snow
+! 1  - OI applied to snow depth 
+! 2  - OI appplied to SWE
+! Note:SFCSUB coded for different snow obs. types, but OI calling program is not
+
+! 
+ REAL, ALLOCATABLE         :: SNOANL(:) 
+ !Integer	           :: s_assm_hour
+
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
-                  ZSEA2_MM, MAX_TASKS
+                  ZSEA2_MM, MAX_TASKS, SNOW_IO_TYPE
 !
  DATA IDIM,JDIM,LSOIL/96,96,4/
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
+ DATA SNOW_IO_TYPE/0/
 !
  CALL MPI_INIT(IERR)
  CALL MPI_COMM_SIZE(MPI_COMM_WORLD, NPROCS, IERR)
@@ -133,13 +144,25 @@
  READ(36, NML=NAMCYC)
  IF (MYRANK==0) WRITE(6,NAMCYC)
 
+ LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
+
+ ! do snow OI, if requested
+ if (SNOW_IO_TYPE .gt. 0) then
+         ALLOCATE(SNOANL(LENSFC))
+         CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
+
+         ! snow analysis with OI DA
+         ! s_assm_hour =18
+         ! if (IH == s_assm_hour) then
+         Call Snow_Analysis(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, SNOANL)
+ ENDIF
+
  IF (MAX_TASKS < 99999 .AND. MYRANK > (MAX_TASKS - 1)) THEN
    PRINT*,"USER SPECIFIED MAX NUMBER OF TASKS: ", MAX_TASKS
    PRINT*,"WILL NOT RUN CYCLE PROGRAM ON RANK: ", MYRANK
    GOTO 333
  ENDIF
 
- LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ZSEA1 = FLOAT(ZSEA1_MM) / 1000.0  ! CONVERT FROM MM TO METERS
  ZSEA2 = FLOAT(ZSEA2_MM) / 1000.0
@@ -154,15 +177,27 @@
  IF (MYRANK==0) PRINT*,"LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH: ", &
               LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH
 
- CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
+ IF (SNOW_IO_TYPE ==0 ) THEN
+        CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
-             ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK)
+             ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
+             SNOW_IO_TYPE)  
+ ELSE
  
+        CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
+             IY,IM,ID,IH,FH,IALB,                  &
+             USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
+             ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
+             SNOW_IO_TYPE, SNOANL)  
+ ENDIF
+
  PRINT*
  PRINT*,'CYCLE PROGRAM COMPLETED NORMALLY ON RANK: ', MYRANK
 
  333 CONTINUE
+
+ IF (ALLOCATED(SNOANL)) DEALLOCATE(SNOANL)
 
  CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
 
@@ -177,7 +212,8 @@
  SUBROUTINE SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
                    IY,IM,ID,IH,FH,IALB,                  &
                    USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
-                   ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK)
+                   ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
+                   SNOW_IO_TYPE,SNOANL)  ! analysis SWE and Depth from surface_cycle
 !
  USE READ_WRITE_DATA
 
@@ -185,11 +221,12 @@
 
  INTEGER, INTENT(IN) :: IDIM, JDIM, LENSFC, LSOIL, IALB
  INTEGER, INTENT(IN) :: LUGB, IY, IM, ID, IH
- INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK
+ INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK, SNOW_IO_TYPE
 
  LOGICAL, INTENT(IN) :: USE_UFO, DO_NSST, ADJT_NST_ONLY
  
  REAL, INTENT(IN)    :: FH, DELTSFC, ZSEA1, ZSEA2
+ REAL, INTENT(IN), OPTIONAL :: SNOANL(LENSFC)
 
  INTEGER, PARAMETER  :: NLUNIT=35
  INTEGER, PARAMETER  :: SZ_NML=1
@@ -229,6 +266,8 @@
  TYPE(NSST_DATA)     :: NSST
  real, dimension(idim,jdim) :: tf_clm,tf_trd,sal_clm
  real, dimension(lensfc)    :: tf_clm_tile,tf_trd_tile,sal_clm_tile
+ 
+ 
 !--------------------------------------------------------------------------------
 ! GSI_FILE is the path/name of the gaussian GSI file which contains NSST
 ! increments.
@@ -429,8 +468,10 @@
 
  IF (.NOT. ADJT_NST_ONLY) THEN
    PRINT*
-   PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."
-   CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,          &
+   PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."          
+ 
+   IF (SNOW_IO_TYPE == 0) THEN
+        CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
                SLMASK,OROG, OROG_UF, USE_UFO, DO_NSST,   &
                SIHFCS,SICFCS,SITFCS,SWDFCS,SLCFCS,       &
@@ -440,7 +481,23 @@
                VEGFCS,VETFCS,SOTFCS,ALFFCS,              &
                CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
                SZ_NML, INPUT_NML_FILE,                   &
-               IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX)
+               IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
+               SNOW_IO_TYPE) 
+    ELSE
+        CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
+               IY,IM,ID,IH,FH,RLA,RLO,                   &
+               SLMASK,OROG, OROG_UF, USE_UFO, DO_NSST,   &
+               SIHFCS,SICFCS,SITFCS,SWDFCS,SLCFCS,       &
+               VMNFCS,VMXFCS,SLPFCS,ABSFCS,              &
+               TSFFCS,SNOFCS,ZORFCS,ALBFCS,TG3FCS,       &
+               CNPFCS,SMCFCS,STCFCS,SLIFCS,AISFCS,       &
+               VEGFCS,VETFCS,SOTFCS,ALFFCS,              &
+               CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
+               SZ_NML, INPUT_NML_FILE,                   &
+               IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
+               SNOW_IO_TYPE, SNOANL)
+   ENDIF 
+
  ENDIF
 
 !--------------------------------------------------------------------------------
