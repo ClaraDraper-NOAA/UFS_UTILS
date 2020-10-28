@@ -1,7 +1,7 @@
 SHELL=	/bin/ksh
 FC      =$(FCMP)
 LIBS    =$(LIBSM) -L/scratch2/BMC/gsienkf/Tseganeh.Gichamo/libs -llapack
-OBJS	=num_parthds.o machine.o cycle.o sfcsub.o read_write_data.o snow_da_OI.o snow_analysis.o
+OBJS	=num_parthds.o machine.o cycle.o sfcsub.o read_write_data.o snow_da.o snow_analysis.o
 
 CMD     =global_cycle
 $(CMD):	$(OBJS)
@@ -16,10 +16,10 @@ machine.o:	machine.f90
 read_write_data.o:	read_write_data.f90
 	${FC} $(FFLAGS) -c read_write_data.f90
 
-snow_da_OI.o: snow_da_OI.f90
-	$(FC)  $(FFLAGS) $(OMPFLAG) -c snow_da_OI.f90
+snow_da.o: snow_da.f90
+	$(FC)  $(FFLAGS) $(OMPFLAG) -c snow_da.f90
 
-snow_analysis.o: snow_da_OI.o snow_analysis.f90
+snow_analysis.o: snow_da.o snow_analysis.f90
 	$(FC)  $(FFLAGS) $(OMPFLAG) -c snow_analysis.f90
 
 sfcsub.o: machine.o sfcsub.F
