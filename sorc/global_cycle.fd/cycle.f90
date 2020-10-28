@@ -108,28 +108,35 @@
 
 ! 
  REAL, ALLOCATABLE   :: SNOANL(:) 
+ REAL                :: PERCENT_OBS_WITHHELD
+ REAL                :: horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele
+ Integer             :: max_num_obs_at_point
  CHARACTER(LEN=500)  :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-                        IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR
+                        IMS_INDEXES_PATH
  !Integer	           :: s_assm_hour
 
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
-                  ZSEA2_MM, MAX_TASKS, SNOW_IO_TYPE,      &
-                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-                  IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR
+                  ZSEA2_MM, MAX_TASKS, SNOW_IO_TYPE, PERCENT_OBS_WITHHELD,    &
+                  horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
+                  max_num_obs_at_point, &
+                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH
 !
  DATA IDIM,JDIM,LSOIL/96,96,4/
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
  DATA SNOW_IO_TYPE/0/
+ DATA PERCENT_OBS_WITHHELD/0.0/
+ DATA horz_len_scale/55.0/
+ DATA ver_len_scale/800./
+ DATA obs_tolerance/5./
+ DATA ims_max_ele/1500./ 
+ DATA max_num_obs_at_point/50/ 
  DATA GHCND_SNOWDEPTH_PATH/'        '/
  DATA IMS_SNOWCOVER_PATH/'        '/
  DATA IMS_INDEXES_PATH/'        '/
- DATA CURRENT_ANALYSIS_PATH/'        '/  
- DATA ENKFGDAS_TOP_DIR/'        '/
-
 !
  CALL MPI_INIT(IERR)
  CALL MPI_COMM_SIZE(MPI_COMM_WORLD, NPROCS, IERR)
@@ -165,17 +172,11 @@
     ! s_assm_hour =18
     ! if (IH == s_assm_hour) then
     Call Snow_Analysis_OI(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
-                          LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-                          IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, SNOANL)
-    ! Call Snow_Analysis_OI_multiTime(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, & 
-    !                          LENSFC, IVEGSRC,GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-    !                       IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, SNOANL)
-	  ! Call Snow_Analysis_EnKF(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
-    ! 	            DELTSFC, LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-    !               IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR, SNOANL)
-	  ! Call Snow_Analysis_EnSRF(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
-    ! 	            DELTSFC, LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-    !               IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR, SNOANL)
+                          LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
+                          horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
+                          max_num_obs_at_point, &
+                          GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, &
+                          SNOANL)
     ! Call map_outputs_toObs(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
     !                        LENSFC, CURRENT_ANALYSIS_PATH)
  ENDIF

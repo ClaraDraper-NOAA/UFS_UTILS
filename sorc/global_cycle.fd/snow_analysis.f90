@@ -7,1661 +7,11 @@ Use, Intrinsic :: IEEE_ARITHMETIC
 
 CONTAINS
 
-subroutine Snow_Analysis_EnSRF(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
-				   DELTSFC, LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-				   IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR, SNOANL)
-						   
-   !----------------------------------------------------------------------
-   ! Input: forecast/background states for a single tile by a single MPI process
-   ! reads observations: snow depth / SWE and cover
-   ! calls observation operator for a given tile 
-   ! does OI update per tile
-   ! returns updated/Analysis states back to the caller, surface drive (sfcdrv) program
-   !
-   ! RLA, RLO: lat lon information for the tile
-   ! SNOFCS(LENSFC), SWEFCS(LENSFC): snowdepth and snow water equivalent forecat (background)
-   ! (background/forecast in arrays of LENSFC)
-   ! compute snow depnsity (SNWDEN) and fraction of snow (if needed) from SWE/SNWD 
-   !
-   ! IDIM * JDIM = LENSFC: number of grid cells in tile = xdim * ydim   
-   ! IY, IM, ID, IH = year, month, day, hour of current model step   
-   ! MYRANK: rank/id of the MPI process
-   !
-   ! Outputs:
-   ! SNOANL:  SWE and snowdepthafter DA
-   !                   
-   !----------------------------------------------------------------------
-   IMPLICIT NONE
-   !
-   include 'mpif.h'
-   
-   integer, parameter :: dp = kind(1.d0)
-
-   INTEGER, intent(in) :: SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, IVEGSRC
-   REAL, intent(in)    :: DELTSFC
-   CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-								IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR
-!  GHCND_SNOWDEPTH_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/",
-!  IMS_SNOWCOVER_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/",
-!  IMS_INDEXES_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/",
-!  CURRENT_ANALYSIS_PATH = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-   REAL, intent(Out)   :: SNOANL(LENSFC)   !, SWDANL(LENSFC), anl_fSCA(LENSFC)
-   REAL                :: SWDANL(LENSFC)
-   CHARACTER(LEN=5)    :: TILE_NUM
-   Character(LEN=3)    :: rank_str
-   INTEGER			    :: IERR	
-   REAL       :: RLA(LENSFC), RLO(LENSFC), RLO_Tile(LENSFC), OROG(LENSFC), OROG_UF(LENSFC)
-   REAL     :: SNOFCS(LENSFC), SWEFCS(LENSFC), SNWDEN(LENSFC), VETFCS(LENSFC)	
-   CHARACTER(len=250)   :: dim_name, ghcnd_inp_file, ims_inp_file, ims_inp_file_indices
-   CHARACTER(len=250) 	 :: anl_inp_path, da_out_file
-   LOGICAL 		         :: save_Ens  ! save ens inputs for inspection
-   CHARACTER(len=5)     :: y_str, m_str, d_Str, h_str, hprev_str, fvs_tile
-   REAL, ALLOCATABLE    :: SNOFCS_atGHCND(:), SNOObs_atGHCND(:)		!, SWDFCS_atGHCND(:)
-   REAL, ALLOCATABLE    :: Lat_GHCND(:), Lon_GHCND(:), Ele_GHCND(:)  
-   REAL                 :: lat_min, lat_max, lon_min, lon_max  	
-   Real		     :: SNCOV_IMS(LENSFC)  ! ims resampled at each grid
-   Real		     :: SNWD_IMS_at_Grid(LENSFC)
-   INTEGER :: Num_Ghcnd, Num_Ims, num_Eval, num_sub !Num_Ims_Lat, Num_Ims_Lon
-   Real	:: max_distance   ! radius_of_influence for selecting state at observation point
-   INTEGER :: jndx, zndx, ncol, nrow
-   Integer, Allocatable   :: loc_nearest_Obs(:)
-   Integer				   :: num_loc, num_loc_1, max_num_loc
-   Real, Parameter		:: Stdev_back = 30., Stdev_Obs_depth = 40., Stdev_Obs_ims = 80. ! mm 
-   Integer				:: ims_assm_hour
-   Real				:: obs_tolerance, ims_max_ele
-   Real                :: L_horz, h_ver
-   Real, Allocatable   :: obs_Array(:), Lat_Obs(:), Lon_Obs(:), Ele_Obs(:)
-   Real               :: SNOANL_Cur(LENSFC), SWDANL_Cur(LENSFC)
-   REAL, ALLOCATABLE  :: SNOANL_Cur_atEvalPts(:)  !evalution points 
-   REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
-   REAL, ALLOCATABLE  :: Lat_atEvalPts(:), Lon_atEvalPts(:), Obs_atEvalPts(:)     !evalution points
-   Integer, ALLOCATABLE 	:: index_back_atEval(:)     ! background locations at eval points 
-   Integer, ALLOCATABLE	:: index_back_atObs(:)   ! the location of background corresponding obs
-! ens
-   Real, ALLOCATABLE    :: SNOFCS_Inp_Ens(:,:), SNOFCS_atObs_ens(:,:)  !, back_at_Obs_ens(:,:)
-   INTEGER              :: ens_size
-   REAL, Allocatable    :: anl_at_Grid_ens(:,:)  !, innov_at_Grid_ensM(:),
-   REAL                 :: innov_at_Grid_ensM(LENSFC)
-   Real, Allocatable    :: obs_Innov_ensM(:)
-   REAL                 :: RLA_cg(LENSFC/4), RLO_cg(LENSFC/4)
-
-   Real			   :: ims_threshold      ! threshold for converting IMS fSCA to binary 1, 0 values	
-   Real			   :: snwden_val
-   LOGICAL 		   :: assim_SWE, assim_GHCND, assim_IMS, assim_IMS_thisGridCell, rcov_localize
-   CHARACTER(len=5)   :: fvs_tile_coarse
-   CHARACTER(len=250) 	 :: ens_inp_path, gdenkf_grid_inp_path
-   Integer              :: index_ens_atGrid(LENSFC)
-
-   Integer 		   :: veg_type_landice  ! 10.21.20: no assmn over land ice
-   ! for mpi par
-   INTEGER            :: Np_ext, Np_til, p_tN, p_tRank, N_sA, N_sA_Ext, mp_start, mp_end
-   INTEGER            :: send_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
-   INTEGER            :: mpiReal_size, rsize
-   
-   assim_SWE = .False.  ! note: if this is set true, may need to adjust background and obs stddev above
-   If (SNOW_IO_TYPE == 2) assim_SWE = .True.
-   assim_GHCND = .True. 
-   assim_IMS = .True.     !!assimilate sncov; 
-   assim_IMS_thisGridCell = .FALSE.    ! if assimilating ims, skip this grid cell for this time step
-   rcov_localize = .False.  ! localize R Covariance 
-
-   IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", MAX_TASKS
-
-   Np_ext = MOD(NPROCS, MAX_TASKS)  ! extra/inactive procs
-   if (MYRANK >  NPROCS - Np_ext - 1) goto 999
-   Np_til = NPROCS / MAX_TASKS  ! num proc. per tile 
-   p_tN = MOD(MYRANK, MAX_TASKS)  ! tile for proc.
-   p_tRank = MYRANK / MAX_TASKS  ! proc. rank within tile
-   N_sA = LENSFC / Np_til  ! sub array length per proc
-   N_sA_Ext = LENSFC - N_sA * Np_til ! extra grid cells
-   if(p_tRank == 0) then 
-	   mp_start = 1
-   else
-	   mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
-   endif
-   mp_end = (p_tRank + 1) * N_sA + N_sA_Ext 		! end index of subarray for proc	
-   If(myrank == 0 )PRINT*,"sub array length ", N_sA, " extra sub array: ", N_sA_Ext
-! if (p_tN /= 2 ) goto 999
-
-   if( (GHCND_SNOWDEPTH_PATH(1:8).eq.'        ').and. & 
-	    (IMS_SNOWCOVER_PATH(1:8).eq.'        ') ) then
-		print*, "Observation paths don't exist!, skipping the OI DA"
-		goto 999
-	end if
-
-! ToDO: use file location the way the rest of the program accesses
-   ! 4.9.20 for now hard code the file location 
-   write(y_str, "(I4)") IY
-   write(m_str, "(I0.2)") IM
-   write(d_str, "(I0.2)") ID
-   write(h_str, "(I0.2)") IH
-   write(hprev_str, "(I0.2)") (IH - INT(DELTSFC))
-   write(fvs_tile, "(I3)") IDIM
-   Write(rank_str, '(I3.3)') (MYRANK+1)
-
-   ! READ THE OROGRAPHY AND GRID POINT LAT/LONS FOR THE CUBED-SPHERE TILE.
-   CALL READ_LAT_LON_OROG_atRank(p_tN, RLA,RLO,OROG,OROG_UF,TILE_NUM,IDIM,JDIM,LENSFC)
-   PRINT*,"Snow anl on ", MYRANK, " Tile group: ", p_tN, " Tile: ", TILE_NUM
-  ! READ THE INPUT SURFACE DATA ON THE CUBED-SPHERE TILE.
-   Call READ_Forecast_Data(p_tN, LENSFC, SWEFCS, SNOFCS, VETFCS)  !VEGFCS, 
-! 10.22.20 Cur_Analysis: exiting SNODEP based analysis
-   !"/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-   anl_inp_path = TRIM(CURRENT_ANALYSIS_PATH)//"snow."// &
-				TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-				TRIM(h_str)// "0000.sfcanl_data."//TILE_NUM//".nc"
-   Call READ_Analysis_Data(anl_inp_path, p_tN, LENSFC, SNOANL_Cur, SWDANL_Cur)
-   
-   write(fvs_tile_coarse, "(I3)") IDIM/2
-   !/scratch1/NCEPDEV/global/glopara/fix/fix_fv3/C768/C768_grid.tileX.nc
-   gdenkf_grid_inp_path = "/scratch1/NCEPDEV/global/glopara/fix/fix_fv3/C"// & 
-	   TRIM(ADJUSTL(fvs_tile_coarse))//"/C"//TRIM(ADJUSTL(fvs_tile_coarse))// &
-	   "_grid."//TILE_NUM//".nc"
-   Call READ_LAT_LON_CoarseRes(gdenkf_grid_inp_path,RLA_cg,RLO_cg,IDIM/2,JDIM/2,LENSFC/4)
-   ! ensemble grid indices from coarse (eg C384) to high res (C768)
-   Call Find_Nearest_GridIndices_Parallel(MYRANK, MAX_TASKS, p_tN, p_tRank, Np_til, &
-							   LENSFC/4, LENSFC, RLA_cg, RLO_cg, RLA, RLO, index_ens_atGrid)
-   ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis
-   da_out_file = "./SNOENS."// &  !
-				 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !
-   ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/ROTDIRS/dec15/"
-   ens_inp_path = TRIM(ENKFGDAS_TOP_DIR)//"enkfgdas."//TRIM(y_str)//TRIM(m_str)// &
-				  TRIM(d_str)//"/"//TRIM(hprev_str)//"/"
-   ens_size = 20					
-   Allocate(SNOFCS_Inp_Ens(ens_size, LENSFC))
-   !Allocate(innov_at_Grid_ensM(LENSFC))
-   Allocate(anl_at_Grid_ens(LENSFC, ens_size+1))	
-   save_Ens = .False.
-   Call read_ensemble_forcing(MYRANK, MAX_TASKS, TILE_NUM, ens_size, LENSFC, IDIM, JDIM, & 
-							   index_ens_atGrid,   &  !RLA_cg, RLO_cg, RLA, RLO,    &
-							   ens_inp_path, y_str, m_str, d_str, h_str, hprev_str, &
-							   assim_SWE, save_Ens, SNOFCS_Inp_Ens, da_out_file) 
-   ! Stop   
-
-   ! data_dir = /scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/GHCND.SNWD.2019100118.nc
-   RLO_Tile = RLO
-   Where(RLO_Tile > 180) RLO_Tile = RLO_Tile - 360
-   lat_min = MAX(MINVAL(RLA) - 1., -90.)
-   lat_max = MIN(MAXVAL(RLA) + 1., 90.)
-   lon_min = MAX(MINVAL(RLO_Tile) - 1., -180.)
-   lon_max = MIN(MAXVAL(RLO_Tile) + 1., 180.)	
-   ! lon_min = MAX(MINVAL(RLO) - 1., 0.)
-   ! lon_max = MIN(MAXVAL(RLO) + 1., 360.)	
-   if (p_tN==3)  then  
-	   lon_min = 125.       ! lon_min is left, lon_max is right, not necessary min/max value
-	   lon_max = -145.
-   endif
-   if ((p_tRank==0) ) then  !.and. print_deb
-	   print*, "Tile ", p_tN, " min/max lat/lon ", lat_min, lat_max, lon_min, lon_max
-   endif
-   ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/
-   ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
-						TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"
-   dim_name = "Site_Id"	
-   call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
-				   lat_min, lat_max, lon_min, lon_max, & 
-				   Num_Ghcnd, SNOObs_atGHCND,		&
-				   Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-   ! Do jndx=0, 5
-   ! 	if ((p_tN == jndx) .and. (p_tRank==0)) then
-   ! 		print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-   ! 		PRINT*, "GHCND SNWD from rank: ", MYRANK
-   ! 		PRINT*, SNOObs_atGHCND
-   ! 	endif
-   ! End do
-   ! Stop
-   ! call Observation_Read_GHCND_Tile(ghcnd_inp_file, dim_name, &
-   ! 				lat_min, lat_max, lon_min, lon_max, & 
-   ! 				Num_Ghcnd, SNOObs_atGHCND,		&
-   ! 				Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-   ! call Observation_Read_GHCND(ghcnd_inp_file, dim_name, Num_Ghcnd, SNOObs_atGHCND,		&
-   ! 				Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-   
-   if ((p_tRank==0) .and. print_deb) then
-	   print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-   endif
-   if ((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-	   PRINT*, "GHCND SNWD from rank: ", MYRANK
-	   PRINT*, SNOObs_atGHCND
-	   PRINT*, "Lat at GHCND from rank: ", MYRANK
-	   PRINT*, Lat_GHCND
-	   PRINT*, "Lon at GHCND from rank: ", MYRANK
-	   PRINT*, Lon_GHCND
-	   PRINT*,'Finished reading GHCND'
-   endif
-   if (myrank==0) PRINT*,'Finished reading GHCND'
-  
-   ! (max) number of IMS subcells within a tile grid cell
-   If (IDIM == 96) then          
-	   num_sub = 627               
-	   max_distance = 240.		!Km radius of influence: distance from gridcell to search for observations
-   elseif (IDIM == 128) then
-	   num_sub = 627               
-	   max_distance = 240.		!Km 
-   elseif (IDIM == 192) then
-	   !num_sub = 30 
-	   PRINT*,'Error, tile type not known '
-	   stop
-   elseif (IDIM == 384) then
-	   !num_sub = 30  
-	   PRINT*,'Error, tile type not known '
-	   stop      
-   elseif (IDIM == 768) then
-	   num_sub = 30
-	   max_distance = 27.        			!Km  
-   else
-	   PRINT*,'Error, tile type not known '
-	   stop   
-   endif
-   ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
-	ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"IMS.SNCOV."// &
-				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"                      !
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
-	ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
-						   ".IMS.Indices."//TRIM(TILE_NUM)//".nc"				
-   Call Observation_Read_IMS_Full(ims_inp_file, ims_inp_file_indices, &
-								  MYRANK, JDIM, IDIM, num_sub, SNCOV_IMS)
-   if((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-	   PRINT*, "IMS SNCOV from rank: ", MYRANK
-	   PRINT*, SNCOV_IMS
-	   PRINT*,'Finished reading IMS'
-   endif 
-   if (myrank==0) PRINT*,'Finished reading IMS'
-   
-   ! 4.8.20: compute snow density ratio from forecast swe and snwdepth
-   SNWDEN = SNOFCS / SWEFCS
-   snwden_val = SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) &
-					/ COUNT (.not. IEEE_IS_NAN(SNWDEN))
-   SNWDEN = snwden_val  !10.   ! ratio of sndepth to swe when swe /=0 : SNOFCS / SWEFCS
-   if(p_tRank == 0) then
-	   print*, "Process ", MYRANK, " average snwd/swe ratio: ", snwden_val
-   endif
-   ! Get model states at obs points
-   ALLOCATE(SNOFCS_atGHCND(Num_Ghcnd))
-   ALLOCATE(Ele_GHCND(Num_Ghcnd)) 
-   ALLOCATE(index_back_atObs(Num_Ghcnd)) 
-   !ALLOCATE(index_back_atGHCND(Num_Ghcnd)) 
-   num_Eval = floor(0.05 * Num_Ghcnd)      ! using 5% of ghcnd locations for evaluation
-   ALLOCATE(index_back_atEval(num_Eval)) 
-   ALLOCATE(Obs_atEvalPts(num_Eval)) 
-   ALLOCATE(SNOFCS_atEvalPts(num_Eval)) 
-   ALLOCATE(Lat_atEvalPts(num_Eval))
-   ALLOCATE(Lon_atEvalPts(num_Eval)) 
-   ALLOCATE(innov_atEvalPts(num_Eval))
-   ALLOCATE(SNOANL_atEvalPts(num_Eval)) 
-   ALLOCATE(SNOANL_Cur_atEvalPts(num_Eval)) 	 	
-   if(p_tRank == 0) then 
-	   PRINT*, "Tile ", p_tN+1, " ", num_Eval, ' evaluation points to be excluded from DA'	
-   endif	
-   Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-					   RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-					   LENSFC, Num_Ghcnd, num_Eval, max_distance, SNOFCS, SNOObs_atGHCND,  &
-					   SNOFCS_atGHCND, Ele_GHCND, index_back_atObs, index_back_atEval, Obs_atEvalPts,    &
-					   SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-   ! Call Observation_Operator_Snofcs_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-   !                     RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-   ! 					LENSFC, Num_Ghcnd, num_Eval, max_distance, SNOFCS, SNOObs_atGHCND,  &
-   ! 					Ele_GHCND, index_back_atObs, index_back_atEval, Obs_atEvalPts,    &
-   ! 					SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-   ALLOCATE(SNOFCS_atObs_ens(ens_size, Num_Ghcnd))
-   SNOFCS_atObs_ens = IEEE_VALUE(SNOFCS_atObs_ens, IEEE_QUIET_NAN)
-   Do jndx = 1, Num_Ghcnd
-	   if (index_back_atObs(jndx) > 0) then
-		   SNOFCS_atObs_ens(:, jndx) = SNOFCS_Inp_Ens(:, index_back_atObs(jndx))
-	   endif
-   end do
-
-   if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then 
-	   PRINT*, "Background Indices at eval points"
-	   PRINT*, index_back_atEval
-	   PRINT*, "Background Indices at obs points"
-	   PRINT*, index_back_atObs	
-	   PRINT*, "Obs at Eval Points" 
-	   PRINT*, Obs_atEvalPts	
-	   PRINT*, "Forecast at Eval Points"
-	   PRINT*, SNOFCS_atEvalPts	
-	   PRINT*, "Lat at Eval Points"
-	   PRINT*, Lat_atEvalPts
-	   PRINT*, "Lon at Eval Points"
-	   PRINT*, Lon_atEvalPts
-   endif
-   !Stop
-   ! call Observation_Operator(RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-   ! 					LENSFC, Num_Ghcnd, max_distance,            &
-   ! 					SNOFCS,                                  &
-   ! 					SNOFCS_atGHCND, Ele_GHCND, index_back_atGHCND)
-   if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-	   PRINT*, "GHCND Lat range from rank: ", MYRANK, MINVAL(Lat_GHCND), " ", MAXVAL(Lat_GHCND)
-	   PRINT*, "GHCND Lon range from rank: ", MYRANK, MINVAL(Lon_GHCND), " ", MAXVAL(Lon_GHCND)
-	   PRINT*, "Background at GHCND locations from rank: ", MYRANK
-	   PRINT*, SNOFCS_atGHCND   !SNOFCS_atObs_ens   !	
-	   PRINT*, "Elevation at GHCND locations from rank: ", MYRANK
-	   PRINT*, Ele_GHCND
-	   PRINT*,'Finished observation operator for GHCND'	
-   endif
-   if (myrank==0) PRINT*,'Finished observation operator for GHCND'		
-   ims_threshold = 0.5  ! threshold for converting IMS fSCA to binary 1, 0 values
-   ! Call Observation_Operator_IMS_fSCA_Threshold(SNCOV_IMS, SNOFCS, SNWDEN, assim_SWE,	   &
-   ! 						LENSFC, ims_threshold, SNWD_IMS_at_Grid) 
-   call Observation_Operator_IMS_fSCA(SNCOV_IMS, SNWDEN, VETFCS, assim_SWE, LENSFC, SNWD_IMS_at_Grid) 
-   if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-	   PRINT*, "IMS obs at each grid cell from rank: ", MYRANK
-	   PRINT*, SNWD_IMS_at_Grid
-	   PRINT*,'Finished observation operator for IMS'
-   endif
-   if (myrank==0) PRINT*,'Finished observation operator for IMS'
-   
-   L_horz = 55.  !120.  !
-   h_ver = 800.  !1200.	!
-   obs_tolerance = 5.0
-   max_num_loc = 50   !100	!
-   ims_max_ele = 1500.
-   ims_assm_hour = 18
-   max_distance = 250.   !Km 120.			!
-   !if (myrank==4) then 
-   if (myrank==0) PRINT*,'Starting DA loop'
-
-   ! 10.21.20: no assimilation if land-ice
-	if (IVEGSRC == 2) then   ! sib
-		veg_type_landice=13
-	else
-		veg_type_landice=15
-	endif
-   !Do ncol=1, IDIM
-   !Do nrow = 1, Num_Snotel !JDIM/2
-	   Do jndx = mp_start, mp_end     !1, LENSFC		!jndx = (ncol-1)*JDIM + nrow		! 
-		   num_loc_1 = 0
-		   assim_IMS_thisGridCell = .FALSE.
-		   call debug_print("loop ", float(jndx))
-		   ! GHCND			 
-		   if(assim_GHCND) then
-			   ! 8.19.20: we are assuming here if deterministic forecast exists/not null
-			   ! at a point, then ensemble members also have valid value
-			   call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
-					   Lat_GHCND, Lon_GHCND,  Num_Ghcnd, max_distance, max_num_loc,   &
-					   Stdev_back, Stdev_Obs_depth, obs_tolerance,                 &
-					   SNOFCS_atGHCND, SNOObs_atGHCND,						 &
-					   loc_nearest_Obs,  num_loc_1) !,      &LENSFC,
-			   call debug_print("number of GHCND sndpth obs ", float(num_loc))
-		   endif
-		   num_loc = num_loc_1
-		   !check IMS is assimilated
-		   if (assim_IMS) then
-			   if((.NOT. IEEE_IS_NAN(SNWD_IMS_at_Grid(jndx))) .AND. &
-				  (OROG(jndx) <= ims_max_ele) .AND. &
-				  (IH == ims_assm_hour)) then
-				   num_loc = num_loc + 1
-				   assim_IMS_thisGridCell = .TRUE.
-			   endif
-		   endif
-		   ! if assim_IMS=false >> num_loc_1=num_loc
-		   ! 10.21.20: no assimilation if land-ice	.NE. veg_type_landice	
-			if((num_loc > 0) .and. (NINT(VETFCS(jndx)) /= veg_type_landice)) then ! .and. (SNCOV_IMS(jndx) > 0.)) then    
-			   Allocate(obs_Array(num_loc))
-			   Allocate(Lat_Obs(num_loc))
-			   Allocate(Lon_Obs(num_loc))
-			   Allocate(Ele_Obs(num_loc))
-			   ! ghcnd
-			   if(num_loc_1 > 0) then
-				   Do zndx = 1, num_loc_1     
-					   obs_Array(zndx) = SNOObs_atGHCND(loc_nearest_Obs(zndx))
-					   Lat_Obs(zndx) = Lat_GHCND(loc_nearest_Obs(zndx))
-					   Lon_Obs(zndx) = Lon_GHCND(loc_nearest_Obs(zndx))
-					   Ele_Obs(zndx) = Ele_GHCND(loc_nearest_Obs(zndx))
-				   End Do
-			   End if
-			   !ims
-			   if(assim_IMS_thisGridCell) then
-				   obs_Array(num_loc) = SNWD_IMS_at_Grid(jndx)
-				   Lat_Obs(num_loc) = RLA(jndx)   !Lat_IMS_atGrid(jndx)
-				   Lon_Obs(num_loc) = RLO(jndx)   !Lon_IMS_atGrid(jndx)
-				   Ele_Obs(num_loc) = OROG(jndx)  !Ele_IMS(jndx)
-			   endif	
-			   ! EnKF
-			   Allocate(obs_Innov_ensM(num_loc))	
-			   Call snow_DA_EnSRF(RLA(jndx), RLO(jndx), OROG(jndx),     &
-			   Lat_Obs, Lon_Obs, Ele_Obs,     				&
-			   L_horz, h_ver,                                      &   !L_horz in Km, h_ver in m
-			   assim_IMS_thisGridCell, rcov_localize,                   &
-			   jndx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-			   num_loc_1, num_loc, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
-			   Stdev_Obs_depth, Stdev_Obs_ims,                  &
-			   obs_Array,                          &
-			   obs_Innov_ensM, innov_at_Grid_ensM(jndx), anl_at_Grid_ens(jndx,:))
-			   if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then	
-				   print*, "proc ", myrank, "loop ", jndx, &
-				   "num depth obs ", num_loc_1, "total obs", num_loc, " ens size ", ens_size
-				   PRINT*, "Ens background at obs pts: "
-				   PRINT*, SNOFCS_Inp_Ens(:, jndx)	
-				   PRINT*, "Observed"
-				   PRINT*,  obs_Array
-				   PRINT*, "Ens mean Obs innovation: "
-				   PRINT*, obs_Innov_ensM
-				   PRINT*, "Ens mean innovation at grid: "
-				   PRINT*, innov_at_Grid_ensM(jndx)
-				   PRINT*, "Ens analysis at grid: "
-				   PRINT*, anl_at_Grid_ens(jndx, :)
-			   endif					
-			   DEALLOCATE(obs_Array, obs_Innov_ensM)
-			   DEALLOCATE(Lat_Obs, Lon_Obs, Ele_Obs)
-			   ! QCC by ims--use ims as snow mask
-			   Do zndx = 1, ens_size+1  
-				   if((SNCOV_IMS(jndx) >= 0.5) .and. (anl_at_Grid_ens(jndx, zndx) < 50.)) then
-					   anl_at_Grid_ens(jndx, zndx) = 50.
-				   ! elseif((SNCOV_IMS(jndx) < 0.5) .and. (SNCOV_IMS(jndx) > 0.1) .and. (anl_at_Grid(jndx) >= 50)) then
-				   ! 	anl_at_Grid(jndx) = 50.
-				   elseif((SNCOV_IMS(jndx) < 0.1) .and. (anl_at_Grid_ens(jndx, zndx) >= 0.)) then
-					   anl_at_Grid_ens(jndx, zndx) = 0.
-				   endif
-			   End do
-			   if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then						
-				   PRINT*, "Ens analysis at grid after mask: "
-				   PRINT*, anl_at_Grid_ens(jndx, :)
-			   endif
-		   else
-			   anl_at_Grid_ens(jndx, :) = SNOFCS_Inp_Ens(jndx, :)
-		   endif
-		   if (assim_GHCND) Deallocate(loc_nearest_Obs) 
-	   End do
-   !End do
-   if (myrank==0) PRINT*, 'Finished DA loops'
-
-! ToDO: Better way to handle this?
-! Real data type size corresponding to mpi
-   rsize = SIZEOF(snwden_val) 
-   Call MPI_TYPE_SIZE(MPI_REAL, mpiReal_size, IERR) 
-   If (rsize == 4 ) then 
-	   mpiReal_size = MPI_REAL4
-   elseif (rsize == 8 ) then 
-	   mpiReal_size = MPI_REAL8
-   elseif (rsize == 16 ) then 
-	   mpiReal_size = MPI_REAL16
-   else
-	   PRINT*," Possible mismatch between Fortran Real ", rsize," and Mpi Real ", mpiReal_size
-	   Stop
-   endif
-   ! send analyses arrays to 'tile-level root' proc.		
-   ! ens analysis innov_at_Grid_ens(jndx), anl_at_Grid_ens(jndx)
-   if (MYRANK > (MAX_TASKS - 1) ) then
-	   call MPI_SEND(anl_at_Grid_ens(mp_start:mp_end,:),N_sA*(ens_size+1), mpiReal_size,    &
-					 p_tN, MYRANK*1000, MPI_COMM_WORLD, IERR) 
-	   call MPI_SEND(innov_at_Grid_ensM(mp_start:mp_end), N_sA, mpiReal_size,    &
-					 p_tN, MYRANK*10000, MPI_COMM_WORLD, IERR)
-   else    !if(p_tRank == 0) then  
-	   Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
-		   dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-		   send_proc = MYRANK +  pindex * MAX_TASKS
-		   call MPI_RECV(anl_at_Grid_ens(dest_Aoffset:dest_Aoffset+N_sA-1, :), N_sA*(ens_size+1),      &
-		   mpiReal_size, send_proc, send_proc*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-		   call MPI_RECV(innov_at_Grid_ensM(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA,       &
-		   mpiReal_size, send_proc, send_proc*10000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-	   enddo
-   endif
-   if (myrank==0) PRINT*,'Finished Data copy'
-
-   if (MYRANK > MAX_TASKS - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
-
-   ! avoid -ve anl
-   Where(anl_at_Grid_ens < 0.) anl_at_Grid_ens = 0.
-   ! swe and snwd
-   SNOANL = anl_at_Grid_ens(:,ens_size+1) / SNWDEN		!snwden_val 
-   SWDANL = anl_at_Grid_ens(:,ens_size+1)	
-!    if(assim_SWE) then 
-!       SNOANL_Cur = SNOANL_Cur 
-!    else
-! 		SNOANL_Cur = SWDANL_Cur
-!    end if
-   if (print_deb) then
-	   PRINT*, "Innovation SWE/snwd from rank: ", MYRANK
-	   PRINT*, innov_at_Grid_ensM	
-	   PRINT*, "Analysis SWE/ snwd  from rank: ", MYRANK
-	   PRINT*, anl_at_Grid_ens	
-   endif
-
-   !Compute updated snocov	
-   !Call update_snow_cover_fraction(LENSFC, SNOANL, VETFCS, anl_fSCA)
-
-   ! copy values at eval points
-   innov_atEvalPts = IEEE_VALUE(innov_atEvalPts, IEEE_QUIET_NAN)
-   SNOANL_atEvalPts = IEEE_VALUE(SNOANL_atEvalPts, IEEE_QUIET_NAN)
-   SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
-   Do jndx = 1, num_Eval
-	   if ((index_back_atEval(jndx) > 0) .and. &
-	       (NINT(VETFCS(jndx)) /= veg_type_landice)) then  !10.21.20: exclude if land-ice
-		    	innov_atEvalPts(jndx) = innov_at_Grid_ensM(index_back_atEval(jndx))
-		   		SNOANL_atEvalPts(jndx) = anl_at_Grid_ens(index_back_atEval(jndx), ens_size+1)
-		   		SNOANL_Cur_atEvalPts(jndx) = SWDANL_Cur(index_back_atEval(jndx)) !SNOANL_Cur
-	   endif
-   End do
-
-   ! write outputs	
-   Write(rank_str, '(I3.3)') (MYRANK+1)
-   ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis"
-   da_out_file = "./SNOANLEnSRF."// &  !
-				 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !   
-   call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
-						 SWEFCS, SNOANL, SNOFCS, SWDANL, &  !
-						 innov_at_Grid_ensM, SNCOV_IMS, &
-				 !   Num_Ghcnd, Lat_GHCND, Lon_GHCND, SNOObs_atGHCND, &
-			   ! SNOFCS_atGHCND, SNOFCS_atGHCND, SNOFCS_atGHCND)
-			num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-		SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
-
-998 CONTINUE
-   DEALLOCATE(SNOObs_atGHCND, SNOFCS_atGHCND, Lat_GHCND, Lon_GHCND, Ele_GHCND)  !, index_back_atGHCND)
-   DEALLOCATE(Obs_atEvalPts, SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts)
-   DEALLOCATE(SNOANL_Cur_atEvalPts) 
-   DEALLOCATE(index_back_atObs, index_back_atEval, Lat_atEvalPts, Lon_atEvalPts) !, Ele_atEvalPts)
-   DEAllocate(SNOFCS_Inp_Ens, SNOFCS_atObs_ens)
-   DEAllocate(anl_at_Grid_ens)  !innov_at_Grid_ens, 
-   !DEALLOCATE(SNCOV_IMS, Lat_IMS, Lon_IMS, SNOFCS_atIMS, SWDFCS_atIMS)
-999 CONTINUE
-   PRINT*,'Finished EnSRF DA ON RANK: ', MYRANK
-   CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-
-   !STOP
-
-   RETURN
-
-END subroutine Snow_Analysis_EnSRF
-
-subroutine Snow_Analysis_EnKF(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
-	               DELTSFC, LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-	            IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR, SNOANL)
-							
-	!----------------------------------------------------------------------
-	! Input: forecast/background states for a single tile by a single MPI process
-	! reads observations: snow depth / SWE and cover
-	! calls observation operator for a given tile 
-	! does OI update per tile
-	! returns updated/Analysis states back to the caller, surface drive (sfcdrv) program
-	!
-	! RLA, RLO: lat lon information for the tile
-	! SNOFCS(LENSFC), SWEFCS(LENSFC): snowdepth and snow water equivalent forecat (background)
-	! (background/forecast in arrays of LENSFC)
-	! compute snow depnsity (SNWDEN) and fraction of snow (if needed) from SWE/SNWD 
-	!
-	! IDIM * JDIM = LENSFC: number of grid cells in tile = xdim * ydim   
-	! IY, IM, ID, IH = year, month, day, hour of current model step   
-	! MYRANK: rank/id of the MPI process
-	!
-	! Outputs:
-	! SNOANL:  SWE and snowdepthafter DA
-	!                   
-	!----------------------------------------------------------------------
-	IMPLICIT NONE
-	!
-	include 'mpif.h'
-	
-	integer, parameter :: dp = kind(1.d0)
-
-	INTEGER, intent(in) :: SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, IVEGSRC
-	REAL, intent(in)    :: DELTSFC
-	CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-							IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, ENKFGDAS_TOP_DIR
-!  GHCND_SNOWDEPTH_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/",
-!  IMS_SNOWCOVER_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/",
-!  IMS_INDEXES_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/",
-!  CURRENT_ANALYSIS_PATH = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-	REAL, intent(Out)   :: SNOANL(LENSFC)   !, SWDANL(LENSFC), anl_fSCA(LENSFC)
-	REAL                :: SWDANL(LENSFC)
-	CHARACTER(LEN=5)    :: TILE_NUM
-	Character(LEN=3)    :: rank_str
-	INTEGER			    :: IERR	
-	REAL       :: RLA(LENSFC), RLO(LENSFC), RLO_Tile(LENSFC), OROG(LENSFC), OROG_UF(LENSFC)
-	REAL     :: SNOFCS(LENSFC), SWEFCS(LENSFC), SNWDEN(LENSFC), VETFCS(LENSFC)	
-	CHARACTER(len=250)   :: dim_name, ghcnd_inp_file, ims_inp_file, ims_inp_file_indices
-	CHARACTER(len=250) 	 :: anl_inp_path, da_out_file
-	LOGICAL 		     :: save_Ens  ! save ens inputs for inspection
-	CHARACTER(len=5)     :: y_str, m_str, d_Str, h_str, hprev_str, fvs_tile
-	REAL, ALLOCATABLE    :: SNOFCS_atGHCND(:), SNOObs_atGHCND(:)		!, SWDFCS_atGHCND(:)
-	REAL, ALLOCATABLE    :: Lat_GHCND(:), Lon_GHCND(:), Ele_GHCND(:)  
-	REAL                 :: lat_min, lat_max, lon_min, lon_max  	
-	Real		     :: SNCOV_IMS(LENSFC)  ! ims resampled at each grid
-	Real		     :: SNWD_IMS_at_Grid(LENSFC)
-	INTEGER :: Num_Ghcnd, Num_Ims, num_Eval, num_sub !Num_Ims_Lat, Num_Ims_Lon
-	Real	:: max_distance   ! radius_of_influence for selecting state at observation point
-	INTEGER :: jndx, zndx, ncol, nrow
-	Integer, Allocatable   :: loc_nearest_Obs(:)
-	Integer				   :: num_loc, num_loc_1, max_num_loc
-	Real, Parameter		:: Stdev_back = 30., Stdev_Obs_depth = 40., Stdev_Obs_ims = 80. ! mm 
-	Integer				:: ims_assm_hour
-	Real				:: obs_tolerance, ims_max_ele
-	Real                :: L_horz, h_ver
-	Real, Allocatable   :: obs_Array(:), Lat_Obs(:), Lon_Obs(:), Ele_Obs(:)
-	Real               :: SNOANL_Cur(LENSFC), SWDANL_Cur(LENSFC)
-	REAL, ALLOCATABLE  :: SNOANL_Cur_atEvalPts(:)  !evalution points 
-	REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
-	REAL, ALLOCATABLE  :: Lat_atEvalPts(:), Lon_atEvalPts(:), Obs_atEvalPts(:)     !evalution points
-	Integer, ALLOCATABLE 	:: index_back_atEval(:)     ! background locations at eval points 
-	Integer, ALLOCATABLE	:: index_back_atObs(:)   ! the location of background corresponding obs
-! ens
-	Real, ALLOCATABLE    :: SNOFCS_Inp_Ens(:,:), SNOFCS_atObs_ens(:,:)  !, back_at_Obs_ens(:,:)
-	INTEGER              :: ens_size
-	REAL, Allocatable    :: innov_at_Grid_ens(:,:), anl_at_Grid_ens(:,:)
-	Real, Allocatable    :: obs_Innov_ens(:,:)
-	REAL                 :: RLA_cg(LENSFC/4), RLO_cg(LENSFC/4)
-
-	Real			   :: ims_threshold      ! threshold for converting IMS fSCA to binary 1, 0 values	
-	Real			   :: snwden_val
-	LOGICAL 		   :: assim_SWE, assim_GHCND, assim_IMS, assim_IMS_thisGridCell    !assimilate sncov
-	CHARACTER(len=5)   :: fvs_tile_coarse
-	CHARACTER(len=250) 	 :: ens_inp_path, gdenkf_grid_inp_path
-	Integer              :: index_ens_atGrid(LENSFC)
-
-	Integer 		   :: veg_type_landice ! 10.21.20: no assmn over land ice
-	! for mpi par
-	INTEGER            :: Np_ext, Np_til, p_tN, p_tRank, N_sA, N_sA_Ext, mp_start, mp_end
-	INTEGER            :: send_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
-	INTEGER            :: mpiReal_size, rsize
-	
-	assim_SWE = .False.  ! note: if this is set true, may need to adjust background and obs stddev above
-	If (SNOW_IO_TYPE == 2) assim_SWE = .True.
-	assim_GHCND = .True.
-	assim_IMS = .True.     !!assimilate sncov; 
-	assim_IMS_thisGridCell = .FALSE.    ! if assimilating ims, skip this grid cell for this time step
-
-	IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", MAX_TASKS
-
-	Np_ext = MOD(NPROCS, MAX_TASKS)  ! extra/inactive procs
-	if (MYRANK >  NPROCS - Np_ext - 1) goto 999
-	Np_til = NPROCS / MAX_TASKS  ! num proc. per tile 
-	p_tN = MOD(MYRANK, MAX_TASKS)  ! tile for proc.
-	p_tRank = MYRANK / MAX_TASKS  ! proc. rank within tile
-	N_sA = LENSFC / Np_til  ! sub array length per proc
-	N_sA_Ext = LENSFC - N_sA * Np_til ! extra grid cells
-	if(p_tRank == 0) then 
-		mp_start = 1
-	else
-		mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
-	endif
-	mp_end = (p_tRank + 1) * N_sA + N_sA_Ext 		! end index of subarray for proc	
-	If(myrank == 0 )PRINT*,"sub array length ", N_sA, " extra sub array: ", N_sA_Ext
-! if (p_tN /= 2 ) goto 999
-
-	if( (GHCND_SNOWDEPTH_PATH(1:8).eq.'        ').and. & 
-	    (IMS_SNOWCOVER_PATH(1:8).eq.'        ') ) then
-		print*, "Observation paths don't exist!, skipping the OI DA"
-		goto 999
-	end if
-
-! ToDO: use file location the way the rest of the program accesses
-	! 4.9.20 for now hard code the file location 
-	write(y_str, "(I4)") IY
-	write(m_str, "(I0.2)") IM
-	write(d_str, "(I0.2)") ID
-	write(h_str, "(I0.2)") IH
-	write(hprev_str, "(I0.2)") (IH - INT(DELTSFC))
-	write(fvs_tile, "(I3)") IDIM
-	Write(rank_str, '(I3.3)') (MYRANK+1)
-
-	! READ THE OROGRAPHY AND GRID POINT LAT/LONS FOR THE CUBED-SPHERE TILE.
-	CALL READ_LAT_LON_OROG_atRank(p_tN, RLA,RLO,OROG,OROG_UF,TILE_NUM,IDIM,JDIM,LENSFC)
-	PRINT*,"Snow anl on ", MYRANK, " Tile group: ", p_tN, " Tile: ", TILE_NUM
-
-   ! READ THE INPUT SURFACE DATA ON THE CUBED-SPHERE TILE.
-	Call READ_Forecast_Data(p_tN, LENSFC, SWEFCS, SNOFCS, VETFCS)  !VEGFCS, 
-! 10.22.20 Cur_Analysis: exiting SNODEP based analysis
-	!"/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-	anl_inp_path = TRIM(CURRENT_ANALYSIS_PATH)//"snow."// &
-				TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-				TRIM(h_str)// "0000.sfcanl_data."//TILE_NUM//".nc"
-	Call READ_Analysis_Data(anl_inp_path, p_tN, LENSFC, SNOANL_Cur, SWDANL_Cur)
-
-	write(fvs_tile_coarse, "(I3)") IDIM/2
-	!/scratch1/NCEPDEV/global/glopara/fix/fix_fv3/C768/C768_grid.tileX.nc
-	gdenkf_grid_inp_path = "/scratch1/NCEPDEV/global/glopara/fix/fix_fv3/C"// & 
-		TRIM(ADJUSTL(fvs_tile_coarse))//"/C"//TRIM(ADJUSTL(fvs_tile_coarse))// &
-		"_grid."//TILE_NUM//".nc"
-	Call READ_LAT_LON_CoarseRes(gdenkf_grid_inp_path,RLA_cg,RLO_cg,IDIM/2,JDIM/2,LENSFC/4)
-	! ensemble grid indices from coarse (eg C384) to high res (C768)
-	Call Find_Nearest_GridIndices_Parallel(MYRANK, MAX_TASKS, p_tN, p_tRank, Np_til, &
-		                        LENSFC/4, LENSFC, RLA_cg, RLO_cg, RLA, RLO, index_ens_atGrid)
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis"
-	da_out_file = "./SNOENS."// &  !
-				  TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/ROTDIRS/dec15/"
-   ens_inp_path = TRIM(ENKFGDAS_TOP_DIR)//"enkfgdas."//TRIM(y_str)//TRIM(m_str)// &
-				  TRIM(d_str)//"/"//TRIM(hprev_str)//"/"
-	ens_size = 20					
-	Allocate(SNOFCS_Inp_Ens(ens_size, LENSFC))
-	Allocate(innov_at_Grid_ens(LENSFC, ens_size+1))
-	Allocate(anl_at_Grid_ens(LENSFC, ens_size+1))	
-	save_Ens = .False.
-	Call read_ensemble_forcing(MYRANK, MAX_TASKS, TILE_NUM, ens_size, LENSFC, IDIM, JDIM, & 
-								index_ens_atGrid,   &  !RLA_cg, RLO_cg, RLA, RLO,    &
-	                            ens_inp_path, y_str, m_str, d_str, h_str, hprev_str, &
-								assim_SWE, save_Ens, SNOFCS_Inp_Ens, da_out_file) 
-	! Stop   
-
-	! data_dir = /scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/GHCND.SNWD.2019100118.nc
-	RLO_Tile = RLO
-	Where(RLO_Tile > 180) RLO_Tile = RLO_Tile - 360
-	lat_min = MAX(MINVAL(RLA) - 1., -90.)
-	lat_max = MIN(MAXVAL(RLA) + 1., 90.)
-	lon_min = MAX(MINVAL(RLO_Tile) - 1., -180.)
-	lon_max = MIN(MAXVAL(RLO_Tile) + 1., 180.)	
-	! lon_min = MAX(MINVAL(RLO) - 1., 0.)
-	! lon_max = MIN(MAXVAL(RLO) + 1., 360.)	
-	if (p_tN==3)  then  
-		lon_min = 125.       ! lon_min is left, lon_max is right, not necessary min/max value
-		lon_max = -145.
-	endif
-	if ((p_tRank==0) ) then  !.and. print_deb
-		print*, "Tile ", p_tN, " min/max lat/lon ", lat_min, lat_max, lon_min, lon_max
-	endif
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/
-	ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
-					 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"
-	dim_name = "Site_Id"	
-	call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
-					lat_min, lat_max, lon_min, lon_max, & 
-					Num_Ghcnd, SNOObs_atGHCND,		&
-					Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-	! Do jndx=0, 5
-	! 	if ((p_tN == jndx) .and. (p_tRank==0)) then
-	! 		print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-	! 		PRINT*, "GHCND SNWD from rank: ", MYRANK
-	! 		PRINT*, SNOObs_atGHCND
-	! 	endif
-	! End do
-	! Stop
-	! call Observation_Read_GHCND_Tile(ghcnd_inp_file, dim_name, &
-	! 				lat_min, lat_max, lon_min, lon_max, & 
-	! 				Num_Ghcnd, SNOObs_atGHCND,		&
-	! 				Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-	! call Observation_Read_GHCND(ghcnd_inp_file, dim_name, Num_Ghcnd, SNOObs_atGHCND,		&
-	! 				Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-	
-	if ((p_tRank==0) .and. print_deb) then
-		print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-	endif
-	if ((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-		PRINT*, "GHCND SNWD from rank: ", MYRANK
-		PRINT*, SNOObs_atGHCND
-		PRINT*, "Lat at GHCND from rank: ", MYRANK
-		PRINT*, Lat_GHCND
-		PRINT*, "Lon at GHCND from rank: ", MYRANK
-		PRINT*, Lon_GHCND
-		PRINT*,'Finished reading GHCND'
-	endif
-	if (myrank==0) PRINT*,'Finished reading GHCND'
-   
-	! (max) number of IMS subcells within a tile grid cell
-	If (IDIM == 96) then          
-		num_sub = 627               
-		max_distance = 240.		!Km radius of influence: distance from gridcell to search for observations
-	elseif (IDIM == 128) then
-	   num_sub = 627               
-	   max_distance = 240.		!Km 
-	elseif (IDIM == 192) then
-		!num_sub = 30 
-		PRINT*,'Error, tile type not known '
-		stop
-	elseif (IDIM == 384) then
-		!num_sub = 30  
-		PRINT*,'Error, tile type not known '
-		stop      
-	elseif (IDIM == 768) then
-		num_sub = 30
-		max_distance = 27.        			!Km  
-	else
-		PRINT*,'Error, tile type not known '
-		stop   
-	endif
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
-	ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"IMS.SNCOV."// &
-				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"                      !
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
-	ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
-						   ".IMS.Indices."//TRIM(TILE_NUM)//".nc"				
-	Call Observation_Read_IMS_Full(ims_inp_file, ims_inp_file_indices, &
-				                   MYRANK, JDIM, IDIM, num_sub, SNCOV_IMS)
-	if((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-		PRINT*, "IMS SNCOV from rank: ", MYRANK
-		PRINT*, SNCOV_IMS
-		PRINT*,'Finished reading IMS'
-	endif 
-	if (myrank==0) PRINT*,'Finished reading IMS'
-	
-	! 4.8.20: compute snow density ratio from forecast swe and snwdepth
-	SNWDEN = SNOFCS / SWEFCS
-	snwden_val = SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) &
-	                 / COUNT (.not. IEEE_IS_NAN(SNWDEN))
-	SNWDEN = snwden_val  !10.   ! ratio of sndepth to swe when swe /=0 : SNOFCS / SWEFCS
-	if(p_tRank == 0) then
-		print*, "Process ", MYRANK, " average snwd/swe ratio: ", snwden_val
-	endif
-	! Get model states at obs points
-	ALLOCATE(SNOFCS_atGHCND(Num_Ghcnd))
-	ALLOCATE(Ele_GHCND(Num_Ghcnd)) 
-	ALLOCATE(index_back_atObs(Num_Ghcnd)) 
-	!ALLOCATE(index_back_atGHCND(Num_Ghcnd)) 
-	num_Eval = floor(0.05 * Num_Ghcnd)      ! using 5% of ghcnd locations for evaluation
-	ALLOCATE(index_back_atEval(num_Eval)) 
-	ALLOCATE(Obs_atEvalPts(num_Eval)) 
-	ALLOCATE(SNOFCS_atEvalPts(num_Eval)) 
-	ALLOCATE(Lat_atEvalPts(num_Eval))
-	ALLOCATE(Lon_atEvalPts(num_Eval)) 
-	ALLOCATE(innov_atEvalPts(num_Eval))
-	ALLOCATE(SNOANL_atEvalPts(num_Eval))
-	ALLOCATE(SNOANL_Cur_atEvalPts(num_Eval))  	 	
-	if(p_tRank == 0) then 
-		PRINT*, "Tile ", p_tN+1, " ", num_Eval, ' evaluation points to be excluded from DA'	
-	endif	
-	Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-	                    RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-						LENSFC, Num_Ghcnd, num_Eval, max_distance, SNOFCS, SNOObs_atGHCND,  &
-						SNOFCS_atGHCND, Ele_GHCND, index_back_atObs, index_back_atEval, Obs_atEvalPts,    &
-						SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-	! Call Observation_Operator_Snofcs_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-	!                     RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-	! 					LENSFC, Num_Ghcnd, num_Eval, max_distance, SNOFCS, SNOObs_atGHCND,  &
-	! 					Ele_GHCND, index_back_atObs, index_back_atEval, Obs_atEvalPts,    &
-	! 					SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-    ALLOCATE(SNOFCS_atObs_ens(ens_size, Num_Ghcnd))
-	SNOFCS_atObs_ens = IEEE_VALUE(SNOFCS_atObs_ens, IEEE_QUIET_NAN)
-	Do jndx = 1, Num_Ghcnd
-		if (index_back_atObs(jndx) > 0) then
-			SNOFCS_atObs_ens(:, jndx) = SNOFCS_Inp_Ens(:, index_back_atObs(jndx))
-		endif
-	end do
-
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then 
-		PRINT*, "Background Indices at eval points"
-		PRINT*, index_back_atEval
-		PRINT*, "Background Indices at obs points"
-		PRINT*, index_back_atObs	
-		PRINT*, "Obs at Eval Points" 
-		PRINT*, Obs_atEvalPts	
-		PRINT*, "Forecast at Eval Points"
-		PRINT*, SNOFCS_atEvalPts	
-		PRINT*, "Lat at Eval Points"
-		PRINT*, Lat_atEvalPts
-		PRINT*, "Lon at Eval Points"
-		PRINT*, Lon_atEvalPts
-	endif
-	!Stop
-	! call Observation_Operator(RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-	! 					LENSFC, Num_Ghcnd, max_distance,            &
-	! 					SNOFCS,                                  &
-	! 					SNOFCS_atGHCND, Ele_GHCND, index_back_atGHCND)
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-		PRINT*, "GHCND Lat range from rank: ", MYRANK, MINVAL(Lat_GHCND), " ", MAXVAL(Lat_GHCND)
-		PRINT*, "GHCND Lon range from rank: ", MYRANK, MINVAL(Lon_GHCND), " ", MAXVAL(Lon_GHCND)
-		PRINT*, "Background at GHCND locations from rank: ", MYRANK
-		PRINT*, SNOFCS_atGHCND   !SNOFCS_atObs_ens   !	
-		PRINT*, "Elevation at GHCND locations from rank: ", MYRANK
-		PRINT*, Ele_GHCND
-		PRINT*,'Finished observation operator for GHCND'	
-	endif
-	if (myrank==0) PRINT*,'Finished observation operator for GHCND'		
-	ims_threshold = 0.5  ! threshold for converting IMS fSCA to binary 1, 0 values
-	! Call Observation_Operator_IMS_fSCA_Threshold(SNCOV_IMS, SNOFCS, SNWDEN, assim_SWE,	   &
-	! 						LENSFC, ims_threshold, SNWD_IMS_at_Grid) 
-	call Observation_Operator_IMS_fSCA(SNCOV_IMS, SNWDEN, VETFCS, assim_SWE, LENSFC, SNWD_IMS_at_Grid) 
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-		PRINT*, "IMS obs at each grid cell from rank: ", MYRANK
-		PRINT*, SNWD_IMS_at_Grid
-		PRINT*,'Finished observation operator for IMS'
-	endif
-	if (myrank==0) PRINT*,'Finished observation operator for IMS'
-	
-	L_horz = 55.  !120.  !
-	h_ver = 800.  !1200.	!
-	obs_tolerance = 5.0
-	max_num_loc = 50   !100	!
-	ims_max_ele = 1500.
-	ims_assm_hour = 18
-	max_distance = 250.   !Km 120.			!
-	!if (myrank==4) then 
-	if (myrank==0) PRINT*,'Starting DA loop'
-
-	! 10.21.20: no assimilation if land-ice
-	if (IVEGSRC == 2) then   ! sib
-		veg_type_landice=13
-	else
-		veg_type_landice=15
-	endif
-	!Do ncol=1, IDIM
-	!Do nrow = 1, Num_Snotel !JDIM/2
-	    Do jndx = mp_start, mp_end     !1, LENSFC		!jndx = (ncol-1)*JDIM + nrow		! 
-			num_loc_1 = 0
-			assim_IMS_thisGridCell = .FALSE.
-			call debug_print("loop ", float(jndx))
-			! GHCND			 
-			if(assim_GHCND) then
-				! 8.19.20: we are assuming here if deterministic forecast exists/not null
-				! at a point, then ensemble members also have valid value
-				call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
-						Lat_GHCND, Lon_GHCND,  Num_Ghcnd, max_distance, max_num_loc,   &
-						Stdev_back, Stdev_Obs_depth, obs_tolerance,                 &
-						SNOFCS_atGHCND, SNOObs_atGHCND,						 &
-						loc_nearest_Obs,  num_loc_1) !,      &LENSFC,
-				call debug_print("number of GHCND sndpth obs ", float(num_loc))
-			endif
-			num_loc = num_loc_1
-			!check IMS is assimilated
-			if (assim_IMS) then
-				if((.NOT. IEEE_IS_NAN(SNWD_IMS_at_Grid(jndx))) .AND. &
-				   (OROG(jndx) <= ims_max_ele) .AND. &
-				   (IH == ims_assm_hour)) then
-					num_loc = num_loc + 1
-					assim_IMS_thisGridCell = .TRUE.
-				endif
-			endif
-            ! if assim_IMS=false >> num_loc_1=num_loc
-			! 10.21.20: no assimilation if land-ice	.NE. veg_type_landice	
-			if((num_loc > 0) .and. (NINT(VETFCS(jndx)) /= veg_type_landice)) then ! .and. (SNCOV_IMS(jndx) > 0.)) then        
-				Allocate(obs_Array(num_loc))
-				Allocate(Lat_Obs(num_loc))
-				Allocate(Lon_Obs(num_loc))
-				Allocate(Ele_Obs(num_loc))
-				! ghcnd
-				if(num_loc_1 > 0) then
-					Do zndx = 1, num_loc_1     
-						obs_Array(zndx) = SNOObs_atGHCND(loc_nearest_Obs(zndx))
-						Lat_Obs(zndx) = Lat_GHCND(loc_nearest_Obs(zndx))
-						Lon_Obs(zndx) = Lon_GHCND(loc_nearest_Obs(zndx))
-						Ele_Obs(zndx) = Ele_GHCND(loc_nearest_Obs(zndx))
-					End Do
-				End if
-				!ims
-				if(assim_IMS_thisGridCell) then
-					obs_Array(num_loc) = SNWD_IMS_at_Grid(jndx)
-					Lat_Obs(num_loc) = RLA(jndx)   !Lat_IMS_atGrid(jndx)
-					Lon_Obs(num_loc) = RLO(jndx)   !Lon_IMS_atGrid(jndx)
-					Ele_Obs(num_loc) = OROG(jndx)  !Ele_IMS(jndx)
-				endif	
-				! EnKF
-				Allocate(obs_Innov_ens(num_loc, ens_size))				
-				Call snow_DA_EnKF_LocCov(RLA(jndx), RLO(jndx), OROG(jndx),     &
-						Lat_Obs, Lon_Obs, Ele_Obs,     				&
-						L_horz, h_ver,                                      &   !L_horz in Km, h_ver in m
-					assim_IMS_thisGridCell,                    &
-					jndx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-					num_loc_1, num_loc, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
-					Stdev_Obs_depth, Stdev_Obs_ims,                  &
-					obs_Array,                          &
-					obs_Innov_ens, innov_at_Grid_ens(jndx,:), anl_at_Grid_ens(jndx,:))
-				! call snow_DA_EnKF(assim_IMS_thisGridCell,                    &
-				! 	jndx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-				! 	num_loc_1, num_loc, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
-				! 	Stdev_Obs_depth, Stdev_Obs_ims,                  &
-				! 	obs_Array,                          &
-				! 	obs_Innov_ens, innov_at_Grid_ens(jndx,:), anl_at_Grid_ens(jndx,:))
-				if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then	
-					print*, "proc ", myrank, "loop ", jndx, &
-					"num depth obs ", num_loc_1, "total obs", num_loc, " ens size ", ens_size
-					PRINT*, "Ens background at obs pts: "
-					PRINT*, SNOFCS_Inp_Ens(:, jndx)	
-					PRINT*, "Observed"
-					PRINT*,  obs_Array
-					PRINT*, "Ens Obs innovation: "
-					PRINT*, obs_Innov_ens
-					PRINT*, "Ens innovation at grid: "
-					PRINT*, innov_at_Grid_ens(jndx, :)
-					PRINT*, "Ens analysis at grid: "
-					PRINT*, anl_at_Grid_ens(jndx, :)
-				endif					
-				DEALLOCATE(obs_Array, obs_Innov_ens)
-				DEALLOCATE(Lat_Obs, Lon_Obs, Ele_Obs)
-				! QCC by ims--use ims as snow mask
-				Do zndx = 1, ens_size+1  
-					if((SNCOV_IMS(jndx) >= 0.5) .and. (anl_at_Grid_ens(jndx, zndx) < 50.)) then
-						anl_at_Grid_ens(jndx, zndx) = 50.
-					! elseif((SNCOV_IMS(jndx) < 0.5) .and. (SNCOV_IMS(jndx) > 0.1) .and. (anl_at_Grid(jndx) >= 50)) then
-					! 	anl_at_Grid(jndx) = 50.
-					elseif((SNCOV_IMS(jndx) < 0.1) .and. (anl_at_Grid_ens(jndx, zndx) >= 0.)) then
-						anl_at_Grid_ens(jndx, zndx) = 0.
-					endif
-				End do
-				if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then						
-					PRINT*, "Ens analysis at grid after mask: "
-					PRINT*, anl_at_Grid_ens(jndx, :)
-				endif
-			else
-				anl_at_Grid_ens(jndx, :) = SNOFCS_Inp_Ens(jndx, :)
-			endif
-			if (assim_GHCND) Deallocate(loc_nearest_Obs) 
-		End do
-	!End do
-	if (myrank==0) PRINT*, 'Finished DA loops'
-
-! ToDO: Better way to handle this?
-! Real data type size corresponding to mpi
-	rsize = SIZEOF(snwden_val) 
-	Call MPI_TYPE_SIZE(MPI_REAL, mpiReal_size, IERR) 
-	If (rsize == 4 ) then 
-		mpiReal_size = MPI_REAL4
-	elseif (rsize == 8 ) then 
-		mpiReal_size = MPI_REAL8
-	elseif (rsize == 16 ) then 
-		mpiReal_size = MPI_REAL16
-	else
-		PRINT*," Possible mismatch between Fortran Real ", rsize," and Mpi Real ", mpiReal_size
-		Stop
-	endif
-	! send analyses arrays to 'tile-level root' proc.		
-	! ens analysis innov_at_Grid_ens(jndx), anl_at_Grid_ens(jndx)
-	if (MYRANK > (MAX_TASKS - 1) ) then
-		call MPI_SEND(anl_at_Grid_ens(mp_start:mp_end,:),N_sA*(ens_size+1), mpiReal_size,    &
-					  p_tN, MYRANK*1000, MPI_COMM_WORLD, IERR) 
-		call MPI_SEND(innov_at_Grid_ens(mp_start:mp_end,:),N_sA*(ens_size+1), mpiReal_size,    &
-					  p_tN, MYRANK*10000, MPI_COMM_WORLD, IERR)
-	else    !if(p_tRank == 0) then  
-		Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
-			dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-			send_proc = MYRANK +  pindex * MAX_TASKS
-			call MPI_RECV(anl_at_Grid_ens(dest_Aoffset:dest_Aoffset+N_sA-1, :), N_sA*(ens_size+1),      &
-			mpiReal_size, send_proc, send_proc*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-			call MPI_RECV(innov_at_Grid_ens(dest_Aoffset:dest_Aoffset+N_sA-1, :), N_sA*(ens_size+1),       &
-			mpiReal_size, send_proc, send_proc*10000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-		enddo
-	endif
-	if (myrank==0) PRINT*,'Finished Data copy'
-
-	if (MYRANK > MAX_TASKS - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
-
-	! avoid -ve anl
-	Where(anl_at_Grid_ens < 0.) anl_at_Grid_ens = 0.
-	! swe and snwd
-	SNOANL = anl_at_Grid_ens(:,ens_size+1) / SNWDEN		!snwden_val 
-	SWDANL = anl_at_Grid_ens(:,ens_size+1)	
-!    if(assim_SWE) then 
-!       SNOANL_Cur = SNOANL_Cur 
-!    else
-! 		SNOANL_Cur = SWDANL_Cur
-!    end if
-	if (print_deb) then
-		PRINT*, "Innovation SWE/snwd from rank: ", MYRANK
-	    PRINT*, innov_at_Grid_ens	
-	    PRINT*, "Analysis SWE/ snwd  from rank: ", MYRANK
-	    PRINT*, anl_at_Grid_ens	
-	endif
-
-	!Compute updated snocov	
-	!Call update_snow_cover_fraction(LENSFC, SNOANL, VETFCS, anl_fSCA)
-
-	! copy values at eval points
-	innov_atEvalPts = IEEE_VALUE(innov_atEvalPts, IEEE_QUIET_NAN)
-	SNOANL_atEvalPts = IEEE_VALUE(SNOANL_atEvalPts, IEEE_QUIET_NAN)
-	SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
-	Do jndx = 1, num_Eval
-		if ((index_back_atEval(jndx) > 0) .and. &
-		    (NINT(VETFCS(jndx)) /= veg_type_landice)) then  !10.21.20: exclude if land-ice
-				innov_atEvalPts(jndx) = innov_at_Grid_ens(index_back_atEval(jndx), ens_size+1)
-				SNOANL_atEvalPts(jndx) = anl_at_Grid_ens(index_back_atEval(jndx), ens_size+1)
-				SNOANL_Cur_atEvalPts(jndx) = SWDANL_Cur(index_back_atEval(jndx)) !SNOANL_Cur
-		endif
-	End do
-
-	! write outputs	
-	Write(rank_str, '(I3.3)') (MYRANK+1)
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis
-	da_out_file = "./SNOANLEnKF."// &  !
-				  TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !	
-	call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
-	                      SWEFCS, SNOANL, SNOFCS, SWDANL, &  !
-						  innov_at_Grid_ens(:,ens_size+1), SNCOV_IMS, &
-			      !   Num_Ghcnd, Lat_GHCND, Lon_GHCND, SNOObs_atGHCND, &
-			    !   SNOFCS_atGHCND, SNOFCS_atGHCND, SNOFCS_atGHCND)
-			num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-		SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
-
-998 CONTINUE
-	DEALLOCATE(SNOObs_atGHCND, SNOFCS_atGHCND, Lat_GHCND, Lon_GHCND, Ele_GHCND)  !, index_back_atGHCND)
-	DEALLOCATE(Obs_atEvalPts, SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts)
-	DEALLOCATE(SNOANL_Cur_atEvalPts)
-	DEALLOCATE(index_back_atObs, index_back_atEval, Lat_atEvalPts, Lon_atEvalPts) !, Ele_atEvalPts)
-	DEAllocate(SNOFCS_Inp_Ens, SNOFCS_atObs_ens)
-	DEAllocate(innov_at_Grid_ens, anl_at_Grid_ens)
-	!DEALLOCATE(SNCOV_IMS, Lat_IMS, Lon_IMS, SNOFCS_atIMS, SWDFCS_atIMS)
-999 CONTINUE
-    PRINT*,'Finished EnKF DA ON RANK: ', MYRANK
-	CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-
-	!STOP
-
-	RETURN
-
- END subroutine Snow_Analysis_EnKF 
-
- subroutine Snow_Analysis_OI_multiTime(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, & 
-	                       LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-	                    IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, SNOANL) !IY, IM, ID, IH, 
-							
-	!----------------------------------------------------------------------
-	! Input: forecast/background states for a single tile by a single MPI process
-	! reads observations: snow depth / SWE and cover
-	! calls observation operator for a given tile 
-	! does OI update per tile
-	! returns updated/Analysis states back to the caller, surface drive (sfcdrv) program
-	!
-	! RLA, RLO: lat lon information for the tile
-	! SNOFCS(LENSFC), SWDFCS(LENSFC): snowdepth and snow water equivalent forecat (background)
-	! (background/forecast in arrays of LENSFC)
-	! compute snow depnsity (SNWDEN) and fraction of snow (if needed) from SWE/SNWD 
-	!
-	! IDIM * JDIM = LENSFC: number of grid cells in tile = xdim * ydim   
-	! IY, IM, ID, IH = year, month, day, hour of current model step   
-	! MYRANK: rank/id of the MPI process
-	!
-	! Outputs:
-	! SNOANL, SWDANL:  SWE and snowdepthafter DA
-	!                   
-	!----------------------------------------------------------------------
-	IMPLICIT NONE
-	!
-	include 'mpif.h'
-	
-	integer, parameter :: dp = kind(1.d0)
-
-	INTEGER, intent(in) :: SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, LENSFC, IVEGSRC
-	CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-									  IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH
-!  GHCND_SNOWDEPTH_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/",
-!  IMS_SNOWCOVER_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/",
-!  IMS_INDEXES_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/",
-!  CURRENT_ANALYSIS_PATH = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-	INTEGER             :: IY, IM, ID, IH
-	INTEGER			    :: dTIncrement
-	REAL                :: DELTSFC, IH_real
-	REAL, intent(Out)   :: SNOANL(LENSFC)   !, SWDANL(LENSFC), anl_fSCA(LENSFC)
-	CHARACTER(LEN=5)    :: TILE_NUM
-	Character(LEN=3)    :: rank_str
-	INTEGER			    :: IERR	
-	REAL        :: RLA(LENSFC), RLO(LENSFC), RLO_Tile(LENSFC), OROG(LENSFC), OROG_UF(LENSFC)
-	REAL                :: SNOFCS_Inp(LENSFC), SWDFCS(LENSFC)
-	REAL                :: SNOFCS(LENSFC), SNWDEN(LENSFC), VETFCS(LENSFC), SWDANL(LENSFC)	
-	CHARACTER(len=250)   :: dim_name, ghcnd_inp_file, ims_inp_file, ims_inp_file_indices
-	CHARACTER(len=250) 	 :: forc_inp_path, anl_inp_path, da_out_file
-	CHARACTER(len=5)     :: y_str, m_str, d_Str, h_str, fvs_tile
-	REAL, ALLOCATABLE    :: SNWD_GHCND(:), SNOFCS_atGHCND(:)		!, SWDFCS_atGHCND(:)
-	REAL, ALLOCATABLE    :: Lat_GHCND(:), Lon_GHCND(:), Ele_GHCND(:)  
-	REAL                 :: lat_min, lat_max, lon_min, lon_max  	
-	Real		     :: SNCOV_IMS(LENSFC)  ! ims resampled at each grid
-	Real		     :: SNWD_IMS_at_Grid(LENSFC)
-
-	INTEGER :: Num_Ghcnd, Num_Ims, num_Eval, num_sub !Num_Ims_Lat, Num_Ims_Lon
-	Real	:: max_distance   ! radius_of_influence for selecting state at observation point
-	INTEGER :: jndx, zndx, ncol, nrow
-	Integer, Allocatable   :: Loc_backSt_atObs(:)
-	Integer				   :: num_loc, num_loc_1, max_num_loc
-	Real, Parameter		:: Stdev_back = 30., Stdev_Obs_depth = 40., Stdev_Obs_ims = 80. ! mm 
-	Integer				:: ims_assm_hour
-	Real				:: obs_tolerance, ims_max_ele
-	Real                :: L_horz, h_ver
-	Real(dp), Allocatable 	 :: B_cov_mat(:,:), b_cov_vect(:)
-	Real(dp), Allocatable 	 :: O_cov_mat(:,:), W_wght_vect(:)
-	Real, Allocatable   :: back_at_Obs(:), obs_Array(:), Lat_Obs(:), Lon_Obs(:), Ele_Obs(:)
-	REAL                :: innov_at_Grid(LENSFC), anl_at_Grid(LENSFC)
-	Real, Allocatable  :: obs_Innov(:)
-	Real               :: SNOANL_Cur(LENSFC), SWDANL_Cur(LENSFC)
-	REAL, ALLOCATABLE  :: SNOANL_Cur_atEvalPts(:)  !evalution points 
-	REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
-	REAL, ALLOCATABLE  :: Lat_atEvalPts(:), Lon_atEvalPts(:), Obs_atEvalPts(:)     !evalution points
-	Integer, ALLOCATABLE 	:: index_back_atEval(:)     ! background locations at eval points 
-	Integer, ALLOCATABLE	:: index_back_atObs(:)   ! the location of background corresponding obs
-
-	Real			   :: ims_threshold      ! threshold for converting IMS fSCA to binary 1, 0 values	
-	Real			   :: snwden_val
-	LOGICAL 		   :: assim_SWE, assim_GHCND   !assimilate swe? (instead of snow depth)
-	LOGICAL 		   :: assim_IMS, assim_IMS_thisGridCell    !assimilate sncov
-
-	Integer 		   :: veg_type_landice ! 10.21.20: no assmn over land ice
-    ! for mpi par
-	INTEGER            :: Np_ext, Np_til, p_tN, p_tRank, N_sA, N_sA_Ext, mp_start, mp_end
-	INTEGER            :: send_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
-	INTEGER            :: mpiReal_size, rsize
-
-	assim_SWE = .False.  ! note: if this is set true, may need to adjust background and obs stddev above
-	If (SNOW_IO_TYPE == 2) assim_SWE = .True.
-	assim_GHCND = .True.
-	assim_IMS = .True.     !!assimilate sncov; 
-	assim_IMS_thisGridCell = .FALSE.    ! if assimilating ims, skip this grid cell for this time step
-
-	IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", MAX_TASKS
-
-	Np_ext = MOD(NPROCS, MAX_TASKS)  ! extra/inactive procs
-	if (MYRANK >  NPROCS - Np_ext - 1) goto 999
-	Np_til = NPROCS / MAX_TASKS  ! num proc. per tile 
-	p_tN = MOD(MYRANK, MAX_TASKS)  ! tile for proc.
-	p_tRank = MYRANK / MAX_TASKS  ! proc. rank within tile
-	N_sA = LENSFC / Np_til  ! sub array length per proc
-	N_sA_Ext = LENSFC - N_sA * Np_til ! extra grid cells
-	if(p_tRank == 0) then 
-		mp_start = 1
-	else
-		mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
-	endif
-	mp_end = (p_tRank + 1) * N_sA + N_sA_Ext 		! end index of subarray for proc	
-	If(myrank == 0 ) PRINT*,"sub array length ", N_sA, " extra sub array: ", N_sA_Ext
-! if (p_tN /= 2 ) goto 999
-
-	if( (GHCND_SNOWDEPTH_PATH(1:8).eq.'        ').and. & 
-	    (IMS_SNOWCOVER_PATH(1:8).eq.'        ') ) then
-		print*, "Observation paths don't exist!, skipping the OI DA"
-		goto 999
-	end if
-
-	! READ THE INPUT SURFACE DATA ON THE CUBED-SPHERE TILE.
-	Call READ_Forecast_Data(p_tN, LENSFC, SNOFCS_Inp, SWDFCS, VETFCS)  !VEGFCS,
-	! READ THE OROGRAPHY AND GRID POINT LAT/LONS FOR THE CUBED-SPHERE TILE.
-	CALL READ_LAT_LON_OROG_atRank(p_tN, RLA,RLO,OROG,OROG_UF,TILE_NUM,IDIM,JDIM,LENSFC)
-!!PRINT*,"Snow anl on ", MYRANK, " Tile group: ", p_tN, " Tile: ", TILE_NUM
-	RLO_Tile = RLO
-	Where(RLO_Tile > 180) RLO_Tile = RLO_Tile - 360
-	lat_min = MAX(MINVAL(RLA) - 1., -90.)
-	lat_max = MIN(MAXVAL(RLA) + 1., 90.)
-	lon_min = MAX(MINVAL(RLO_Tile) - 1., -180.)
-	lon_max = MIN(MAXVAL(RLO_Tile) + 1., 180.)	
-	! lon_min = MAX(MINVAL(RLO) - 1., 0.)
-	! lon_max = MIN(MAXVAL(RLO) + 1., 360.)	
-	if (p_tN==3)  then  
-		lon_min = 125.       ! lon_min is left, lon_max is right, not necessary min/max value
-		lon_max = -145.
-	endif	
-	if ((p_tRank==0) .and. print_deb) then
-		print*, "Tile ", p_tN, " min/max lat/lon ", lat_min, lat_max, lon_min, lon_max
-	endif
-
-	IY = 2019; IM = 11; ID = 29; IH = 18; IH_real = 18.; 
-	DELTSFC  = 24.0          !* dTIncrement
-	
-Do dTIncrement = 1, 63
-
-	Call UPDATEtime(IY, IM, ID, IH_real, DELTSFC)
-	! IH = INT(IH_real) this should be always 18
-	
-    ! ToDO: use file location the way the rest of the program accesses
-	! 4.9.20 for now hard code the file location
-	write(y_str, "(I4)") IY
-	write(m_str, "(I0.2)") IM
-	write(d_str, "(I0.2)") ID 
-	write(h_str, "(I0.2)") IH
-    write(fvs_tile, "(I3)") IDIM	
-	!write(hprev_str, "(I0.2)") (IH - INT(DELTSFC))
-
-	! forc_inp_path = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/ROTDIRS/dec15/"// &
-	!                "gdas."//TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"/atmos/"//TRIM(h_str)// &
-	! 			    !"/mem"//ens_str//"/RESTART/"// &
-	forc_inp_path = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/fnbgsio/"// &
-					"snow."//TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-					TRIM(h_str)// "0000.sfc_data."//TILE_NUM//".nc"
-	Call READ_Forecast_Data_atPath(forc_inp_path, p_tN, LENSFC, SNOFCS_Inp, SWDFCS) !, VETFCS) !VEGFCS, !SRFLAG)
-! 10.22.20 Cur_Analysis: exiting SNODEP based analysis
-	!"/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-	anl_inp_path = TRIM(CURRENT_ANALYSIS_PATH)//"snow."// &
-				TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-				TRIM(h_str)// "0000.sfcanl_data."//TILE_NUM//".nc"
-	Call READ_Analysis_Data(anl_inp_path, p_tN, LENSFC, SNOANL_Cur, SWDANL_Cur)	
-
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/
-	ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
-					 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"
-	dim_name = "Site_Id"	
-	call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
-					lat_min, lat_max, lon_min, lon_max, & 
-					Num_Ghcnd, SNWD_GHCND,              & !SNOObs_atGHCND,		&
-					Lat_GHCND, Lon_GHCND, MYRANK)  !Ele_GHCND,		&
-	! Do jndx=0, 5
-	! 	if ((p_tN == jndx) .and. (p_tRank==0)) then
-	! 		print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-	! 		PRINT*, "GHCND SNWD from rank: ", MYRANK
-	! 		PRINT*, SNOObs_atGHCND
-	! 	endif
-	! End do
-	! Stop
-	if ((p_tRank==0) .and. print_deb) then
-		print*, "Tile ", p_tN, " num. GHCND obs ", Num_Ghcnd
-	endif
-	if ((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-		PRINT*, "GHCND SNWD from rank: ", MYRANK
-		PRINT*, SNWD_GHCND
-		PRINT*, "Lat at GHCND from rank: ", MYRANK
-		PRINT*, Lat_GHCND
-		PRINT*, "Lon at GHCND from rank: ", MYRANK
-		PRINT*, Lon_GHCND
-		PRINT*,'Finished reading GHCND'
-	endif
-	if (myrank==0) PRINT*,'Finished reading GHCND'
-   
-	! (max) number of IMS subcells within a tile grid cell
-	If (IDIM == 96) then          
-		num_sub = 627               
-		max_distance = 240.		!Km radius of influence: distance from gridcell to search for observations
-	elseif (IDIM == 128) then
-	   num_sub = 627               
-	   max_distance = 240.		!Km 
-	elseif (IDIM == 192) then
-		!num_sub = 30 
-		PRINT*,'Error, tile type not known '
-		stop
-	elseif (IDIM == 384) then
-		!num_sub = 30  
-		PRINT*,'Error, tile type not known '
-		stop      
-	elseif (IDIM == 768) then
-		num_sub = 30
-		max_distance = 27.        			!Km  
-	else
-		PRINT*,'Error, tile type not known '
-		stop   
-	endif
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
-	ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"IMS.SNCOV."// &
-				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"                      !
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
-	ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
-						   ".IMS.Indices."//TRIM(TILE_NUM)//".nc"				
-	Call Observation_Read_IMS_Full(ims_inp_file, ims_inp_file_indices, &
-				                   MYRANK, JDIM, IDIM, num_sub, SNCOV_IMS)
-	if((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
-		PRINT*, "IMS SNCOV from rank: ", MYRANK
-		PRINT*, SNCOV_IMS
-		PRINT*,'Finished reading IMS'
-	endif 
-	if (myrank==0) PRINT*,'Finished reading IMS'
-	
-	! 4.8.20: compute snow density ratio from forecast swe and snwdepth
-	SNWDEN = SWDFCS / SNOFCS_Inp
-	snwden_val = SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) &
-	                 / COUNT (.not. IEEE_IS_NAN(SNWDEN))
-	SNWDEN = snwden_val  !10.   ! ratio of sndepth to swe when swe /=0 : SWDFCS / SNOFCS
-	if(p_tRank == 0 .and. print_deb) then
-		print*, "Process ", MYRANK, " average snwd/swe ratio: ", snwden_val
-	endif
-	if (assim_SWE) then 
-		SNWD_GHCND = SNWD_GHCND / SNWDEN		!snwden_val
-		SNOFCS = SNOFCS_Inp
-	else
-		SNOFCS = SNOFCS_Inp * SNWDEN    !snwden_val  !SWDFCS			! assimilate depth
-		! SNWD_GHCND = SNWD_GHCND 
-	endif
-
-	! Get model states at obs points
-	ALLOCATE(SNOFCS_atGHCND(Num_Ghcnd))
-	ALLOCATE(Ele_GHCND(Num_Ghcnd)) 
-	ALLOCATE(index_back_atObs(Num_Ghcnd)) 
-	num_Eval = floor(0.05 * Num_Ghcnd)      ! using 5% of ghcnd locations for evaluation
-	ALLOCATE(index_back_atEval(num_Eval)) 
-	ALLOCATE(Obs_atEvalPts(num_Eval)) 
-	ALLOCATE(SNOFCS_atEvalPts(num_Eval)) 
-	ALLOCATE(Lat_atEvalPts(num_Eval))
-	ALLOCATE(Lon_atEvalPts(num_Eval)) 
-	ALLOCATE(innov_atEvalPts(num_Eval))
-	ALLOCATE(SNOANL_atEvalPts(num_Eval))
-	ALLOCATE(SNOANL_Cur_atEvalPts(num_Eval))  	 	
-	if(p_tRank == 0) then 
-		PRINT*, "Tile ", p_tN+1, " ", num_Eval, ' points for evaluation excluded from DA'	
-	endif	
-
-	Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-	                    RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-						LENSFC, Num_Ghcnd, num_Eval, max_distance, SNOFCS, SNWD_GHCND,  &
-						SNOFCS_atGHCND, Ele_GHCND, index_back_atObs, index_back_atEval, &
-						Obs_atEvalPts, SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then 
-		PRINT*, "Background Indices at eval points"
-		PRINT*, index_back_atEval	
-		PRINT*, "Obs at Eval Points" 
-		PRINT*, Obs_atEvalPts	
-		PRINT*, "Forecast at Eval Points"
-		PRINT*, SNOFCS_atEvalPts	
-		PRINT*, "Lat at Eval Points"
-		PRINT*, Lat_atEvalPts
-		PRINT*, "Lon at Eval Points"
-		PRINT*, Lon_atEvalPts
-	endif
-	!Stop
-	! call Observation_Operator(RLA, RLO, OROG, Lat_GHCND, Lon_GHCND,   &
-	! 					LENSFC, Num_Ghcnd, max_distance,            &
-	! 					SNOFCS,                                  &
-	! 					SNOFCS_atGHCND, Ele_GHCND, index_back_atGHCND)
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-		PRINT*, "GHCND Lat range from rank: ", MYRANK, MINVAL(Lat_GHCND), " ", MAXVAL(Lat_GHCND)
-		PRINT*, "GHCND Lon range from rank: ", MYRANK, MINVAL(Lon_GHCND), " ", MAXVAL(Lon_GHCND)
-		PRINT*, "Background SWE at GHCND locations from rank: ", MYRANK
-		PRINT*, SNOFCS_atGHCND	
-		PRINT*, "Elevation at GHCND locations from rank: ", MYRANK
-		PRINT*, Ele_GHCND
-		PRINT*,'Finished observation operator for GHCND'	
-	endif
-	if (myrank==0) PRINT*,'Finished observation operator for GHCND'		
-	ims_threshold = 0.5  ! threshold for converting IMS fSCA to binary 1, 0 values
-	! Call Observation_Operator_IMS_fSCA_Threshold(SNCOV_IMS, SNOFCS, SNWDEN, assim_SWE,	   &
-	! 						LENSFC, ims_threshold, SNWD_IMS_at_Grid) 
-	call Observation_Operator_IMS_fSCA(SNCOV_IMS, SNWDEN, VETFCS, assim_SWE, LENSFC, SNWD_IMS_at_Grid) 
-	if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then
-		PRINT*, "IMS obs at each grid cell from rank: ", MYRANK
-		PRINT*, SNWD_IMS_at_Grid
-		PRINT*,'Finished observation operator for IMS'
-	endif
-	if (myrank==0) PRINT*,'Finished observation operator for IMS'
-	
-	L_horz = 55.  !120.  !
-	h_ver = 800.  !1200.	!
-	obs_tolerance = 5.0
-	max_num_loc = 50   !100	!
-	ims_max_ele = 1500.
-	ims_assm_hour = 18
-	max_distance = 250.   !120.			!Km
-	!if (myrank==4) then 
-	if (myrank==0) PRINT*,'Starting DA loop'
-
-	! 10.21.20: no assimilation if land-ice
-	if (IVEGSRC == 2) then   ! sib
-		veg_type_landice=13
-	else
-		veg_type_landice=15
-	endif
-	!Do ncol=1, IDIM
-	!Do nrow = 1, Num_Snotel !JDIM/2
-	    Do jndx = mp_start, mp_end     !1, LENSFC		!jndx = (ncol-1)*JDIM + nrow		! 
-			num_loc_1 = 0
-			assim_IMS_thisGridCell = .FALSE.
-			call debug_print("loop ", float(jndx))
-			! GHCND			 
-			if(assim_GHCND) then
-				call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
-						Lat_GHCND, Lon_GHCND,  Num_Ghcnd, max_distance, max_num_loc,   &
-						Stdev_back, Stdev_Obs_depth, obs_tolerance,                 &
-						SNOFCS_atGHCND, SNWD_GHCND,						 &
-						Loc_backSt_atObs,  num_loc_1) !,      &LENSFC,
-				call debug_print("number of GHCND sndpth obs ", float(num_loc))
-			endif
-			num_loc = num_loc_1
-			!check IMS is assimilated
-			if (assim_IMS) then
-				if((.NOT. IEEE_IS_NAN(SNWD_IMS_at_Grid(jndx))) .AND. &
-				   (OROG(jndx) <= ims_max_ele) .AND. &
-				   (IH == ims_assm_hour)) then
-					num_loc = num_loc + 1
-					assim_IMS_thisGridCell = .TRUE.
-				endif
-			endif 
-			! if assim_IMS=false >> num_loc_1=num_loc
-			! 10.21.20: no assimilation if land-ice	.NE. veg_type_landice	
-			if((num_loc > 0) .and. (NINT(VETFCS(jndx)) /= veg_type_landice)) then ! .and. (SNCOV_IMS(jndx) > 0.)) then      
-				! get background states
-				Allocate(back_at_Obs(num_loc))
-				Allocate(obs_Array(num_loc))
-				Allocate(Lat_Obs(num_loc))
-				Allocate(Lon_Obs(num_loc))
-				Allocate(Ele_Obs(num_loc))
-				! ghcnd
-				if(num_loc_1 > 0) then
-					Do zndx = 1, num_loc_1     
-						back_at_Obs(zndx) = SNOFCS_atGHCND(Loc_backSt_atObs(zndx))
-						obs_Array(zndx) = SNWD_GHCND(Loc_backSt_atObs(zndx))
-						Lat_Obs(zndx) = Lat_GHCND(Loc_backSt_atObs(zndx))
-						Lon_Obs(zndx) = Lon_GHCND(Loc_backSt_atObs(zndx))
-						Ele_Obs(zndx) = Ele_GHCND(Loc_backSt_atObs(zndx))
-					End Do
-				End if
-				!ims
-				if(assim_IMS_thisGridCell) then
-					back_at_Obs(num_loc) = SNOFCS(jndx)
-					obs_Array(num_loc) = SNWD_IMS_at_Grid(jndx)
-					Lat_Obs(num_loc) = RLA(jndx)   !Lat_IMS_atGrid(jndx)
-					Lon_Obs(num_loc) = RLO(jndx)   !Lon_IMS_atGrid(jndx)
-					Ele_Obs(num_loc) = OROG(jndx)  !Ele_IMS(jndx)
-				endif
-				! compute covariances
-				Allocate(B_cov_mat(num_loc, num_loc))
-				Allocate(b_cov_vect(num_loc))
-				Allocate(O_cov_mat(num_loc, num_loc))
-				Allocate(W_wght_vect(num_loc))
-				call compute_covariances(RLA(jndx), RLO(jndx), OROG(jndx), SNOFCS(jndx),    &
-					Lat_Obs, Lon_Obs, Ele_Obs, num_loc,    			 &
-					Stdev_back, Stdev_Obs_depth, Stdev_Obs_ims,      &
-					L_horz, h_ver,                                   &   !L_horz in Km, h_ver in m
-					assim_IMS_thisGridCell,                          &
-					B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
-				! call OI DA
-				Allocate(obs_Innov(num_loc))
-				call Snow_DA_OI(back_at_Obs, obs_Array, num_loc, W_wght_vect,            &
-					SNOFCS(jndx), innov_at_Grid(jndx), anl_at_Grid(jndx), obs_Innov)
-				if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then	
-					print*, "proc ", myrank, "loop ", jndx, "num depth obs ", num_loc_1, "total obs", num_loc
-					PRINT*, " background at obs pts: "
-					PRINT*, back_at_Obs	
-					PRINT*, "Observed"
-					PRINT*,  obs_Array
-					PRINT*, "Obs innovation: "
-					PRINT*, obs_Innov
-					PRINT*, "Weight vector: "
-					PRINT*, W_wght_vect	
-					print*, "innov: ", innov_at_Grid(jndx), "forec: ", SNOFCS(jndx), " anl: ", anl_at_Grid(jndx)
-				endif		
-				!free mem
-				DEALLOCATE(back_at_Obs, obs_Array)
-				DEALLOCATE(Lat_Obs, Lon_Obs, Ele_Obs, obs_Innov)
-				DEALLOCATE(B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
-				! QCC by ims--use ims as snow mask
-				if((SNCOV_IMS(jndx) >= 0.5) .and. (anl_at_Grid(jndx) < 50.)) then
-					anl_at_Grid(jndx) = 50.
-				! elseif((SNCOV_IMS(jndx) < 0.5) .and. (SNCOV_IMS(jndx) > 0.1) .and. (anl_at_Grid(jndx) >= 50)) then
-				! 	anl_at_Grid(jndx) = 50.
-				elseif((SNCOV_IMS(jndx) < 0.1) .and. (anl_at_Grid(jndx) >= 0.)) then
-						anl_at_Grid(jndx) = 0.
-				endif
-				if ((p_tN==2) .and. (p_tRank==0) .and. print_deb) then						
-					PRINT*, "analyis at grid after mask: ", anl_at_Grid(jndx)
-				endif
-			else
-				anl_at_Grid(jndx) = SNOFCS(jndx)
-			endif
-			if (assim_GHCND) Deallocate(Loc_backSt_atObs) 
-		End do
-	!End do
-	if (myrank==0) PRINT*, 'Finished DA loops'
-
-! ToDO: Better way to handle this?
-! Real data type size corresponding to mpi
-	rsize = SIZEOF(snwden_val) 
-	Call MPI_TYPE_SIZE(MPI_REAL, mpiReal_size, IERR) 
-	If (rsize == 4 ) then 
-		mpiReal_size = MPI_REAL4
-	elseif (rsize == 8 ) then 
-		mpiReal_size = MPI_REAL8
-	elseif (rsize == 16 ) then 
-		mpiReal_size = MPI_REAL16
-	else
-		PRINT*," Possible mismatch between Fortran Real ", rsize," and Mpi Real ", mpiReal_size
-		Stop
-	endif
-	! send analyses arrays to 'tile-level root' proc.		
-	if (MYRANK > (MAX_TASKS - 1) ) then
-		call MPI_SEND(anl_at_Grid(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
-					  MYRANK, MPI_COMM_WORLD, IERR) 
-		call MPI_SEND(innov_at_Grid(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
-					  MYRANK*100, MPI_COMM_WORLD, IERR)
-	else    !if(p_tRank == 0) then  
-		Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
-			dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-			send_proc = MYRANK +  pindex * MAX_TASKS
-			call MPI_RECV(anl_at_Grid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
-					  send_proc, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-			call MPI_RECV(innov_at_Grid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
-					  send_proc*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-		enddo
-	endif
-	if (myrank==0) PRINT*,'Finished Data copy'
-
-	if (MYRANK > MAX_TASKS - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
-
-	! avoid -ve anl
-	Where(anl_at_Grid < 0.) anl_at_Grid = 0.
-	! swe and snwd
-	if(assim_SWE) then
-		SNOANL = anl_at_Grid 
-		SWDANL = anl_at_Grid * SNWDEN		!snwden_val 
-		!SNOANL_Cur = SNOANL_Cur    
-	else
-		SNOANL = anl_at_Grid / SNWDEN		!snwden_val 
-		SWDANL = anl_at_Grid
-		SNOANL_Cur = SWDANL_Cur
-		!innov_at_Grid = innov_at_Grid / SNWDEN
-	endif	
-	if (print_deb) then
-		PRINT*, "Innovation SWE/snwd from rank: ", MYRANK
-	    PRINT*, innov_at_Grid	
-	    PRINT*, "Analysis SWE/ snwd  from rank: ", MYRANK
-	    PRINT*, anl_at_Grid	
-	endif
-
-	!Compute updated snocov	
-	!Call update_snow_cover_fraction(LENSFC, SNOANL, VETFCS, anl_fSCA)
-
-	! copy values at eval points
-	innov_atEvalPts = IEEE_VALUE(innov_atEvalPts, IEEE_QUIET_NAN)
-	SNOANL_atEvalPts = IEEE_VALUE(SNOANL_atEvalPts, IEEE_QUIET_NAN)
-	SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
-	Do jndx = 1, num_Eval
-		if ((index_back_atEval(jndx) > 0) .and. &
-		    (NINT(VETFCS(jndx)) /= veg_type_landice)) then  !10.21.20: exclude if land-ice	
-				innov_atEvalPts(jndx) = innov_at_Grid(index_back_atEval(jndx))
-				SNOANL_atEvalPts(jndx) = anl_at_Grid(index_back_atEval(jndx))
-				SNOANL_Cur_atEvalPts(jndx) = SNOANL_Cur(index_back_atEval(jndx))
-		endif
-	End do
-
-	! write outputs	
-	Write(rank_str, '(I3.3)') (MYRANK+1)
-	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis
-	da_out_file = "./SNOANLOI."// &  !
-				  TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !	
-	call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
-	                      SNOFCS_Inp, SNOANL, SWDFCS, SWDANL, &  !
-			      innov_at_Grid, SNCOV_IMS, &
-			      !   Num_Ghcnd, Lat_GHCND, Lon_GHCND, SNWD_GHCND, &
-			      !   SNOFCS_atGHCND, SNOFCS_atGHCND, SNOFCS_atGHCND)
-			      num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-			SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
-
-998 CONTINUE
-	DEALLOCATE(SNWD_GHCND, SNOFCS_atGHCND, Lat_GHCND, Lon_GHCND, Ele_GHCND)  !, index_back_atGHCND)
-	DEALLOCATE(Obs_atEvalPts, SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts)
-	DEALLOCATE(SNOANL_Cur_atEvalPts) 
-	DEALLOCATE(index_back_atObs, index_back_atEval, Lat_atEvalPts, Lon_atEvalPts) !, Ele_atEvalPts)
-	!DEALLOCATE(SNCOV_IMS, Lat_IMS, Lon_IMS, SNOFCS_atIMS, SWDFCS_atIMS)
-	If(MYRANK==0) PRINT*,'Finished OI DA at time: ', y_str, m_str, d_str
-End do
-
-999 CONTINUE
-    !PRINT*,'Finished OI DA ON RANK: ', MYRANK
-	CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-
-	STOP
-
-	RETURN
-
- END subroutine Snow_Analysis_OI_multiTime
-
  subroutine Snow_Analysis_OI(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &  
-							LENSFC, IVEGSRC, GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-							IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH, SNOANL)
+							LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
+							L_horz , h_ver, obs_tolerance, ims_max_ele, max_num_loc, &
+							GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, &
+							SNOANL)
 							
 	!----------------------------------------------------------------------
 	! Input: forecast/background states for a single tile by a single MPI process
@@ -1691,11 +41,13 @@ End do
 
 	INTEGER, intent(in) :: SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, IVEGSRC	
 	CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
-									  IMS_INDEXES_PATH, CURRENT_ANALYSIS_PATH
+									  IMS_INDEXES_PATH 		!, CURRENT_ANALYSIS_PATH
 !  GHCND_SNOWDEPTH_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/",
 !  IMS_SNOWCOVER_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/",
 !  IMS_INDEXES_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/",
-!  CURRENT_ANALYSIS_PATH = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
+	REAL, intent(In)    :: PERCENT_OBS_WITHHELD
+	Real, intent(In)    :: L_horz , h_ver, obs_tolerance, ims_max_ele
+	INTEGER, intent(in) :: max_num_loc 
 	REAL, intent(Out)   :: SNOANL(LENSFC)   !, SWDANL(LENSFC), anl_fSCA(LENSFC)
 	CHARACTER(LEN=5)    :: TILE_NUM
 	Character(LEN=3)    :: rank_str
@@ -1704,7 +56,6 @@ End do
 	REAL                :: SNOFCS_Inp(LENSFC), SWDFCS(LENSFC)
 	REAL                :: SNOFCS(LENSFC), SNWDEN(LENSFC), VETFCS(LENSFC), SWDANL(LENSFC)	
 	CHARACTER(len=250)   :: dim_name, ghcnd_inp_file, ims_inp_file, ims_inp_file_indices
-	CHARACTER(len=250) 	 :: anl_inp_path, da_out_file
 	CHARACTER(len=5)     :: y_str, m_str, d_Str, h_str, fvs_tile
 	REAL, ALLOCATABLE    :: SNWD_GHCND(:), SNOFCS_atGHCND(:)		!, SWDFCS_atGHCND(:)
 	REAL, ALLOCATABLE    :: Lat_GHCND(:), Lon_GHCND(:), Ele_GHCND(:)  
@@ -1716,18 +67,22 @@ End do
 	Real	:: max_distance   ! radius_of_influence for selecting state at observation point
 	INTEGER :: jndx, zndx, ncol, nrow
 	Integer, Allocatable   :: Loc_backSt_atObs(:)
-	Integer				   :: num_loc, num_loc_1, max_num_loc
+	Integer				   :: num_loc, num_loc_1
 	Real, Parameter		:: Stdev_back = 30., Stdev_Obs_depth = 40., Stdev_Obs_ims = 80. ! mm 
 	Integer				:: ims_assm_hour
-	Real				:: obs_tolerance, ims_max_ele
-	Real                :: L_horz, h_ver
+	!Real				:: obs_tolerance, ims_max_ele
+	!, max_num_loc
+
 	Real(dp), Allocatable 	 :: B_cov_mat(:,:), b_cov_vect(:)
 	Real(dp), Allocatable 	 :: O_cov_mat(:,:), W_wght_vect(:)
 	Real, Allocatable   :: back_at_Obs(:), obs_Array(:), Lat_Obs(:), Lon_Obs(:), Ele_Obs(:)
 	REAL                :: innov_at_Grid(LENSFC), anl_at_Grid(LENSFC)
 	Real, Allocatable  :: obs_Innov(:)
-	Real               :: SNOANL_Cur(LENSFC), SWDANL_Cur(LENSFC)
-	REAL, ALLOCATABLE  :: SNOANL_Cur_atEvalPts(:)  !evalution points 
+
+	!Real               :: SNOANL_Cur(LENSFC), SWDANL_Cur(LENSFC)
+	CHARACTER(len=250) 	 :: da_out_file  !anl_inp_path, 
+	!REAL, ALLOCATABLE  :: SNOANL_Cur_atEvalPts(:)  !evalution points 
+
 	REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
 	REAL, ALLOCATABLE  :: Lat_atEvalPts(:), Lon_atEvalPts(:), Obs_atEvalPts(:)     !evalution points
 	Integer, ALLOCATABLE 	:: index_back_atEval(:)     ! background locations at eval points 
@@ -1786,12 +141,12 @@ End do
 	PRINT*,"Snow anl on ", MYRANK, " Tile group: ", p_tN, " Tile: ", TILE_NUM
    ! READ THE INPUT SURFACE DATA ON THE CUBED-SPHERE TILE.
 	Call READ_Forecast_Data(p_tN, LENSFC, SNOFCS_Inp, SWDFCS, VETFCS)  !VEGFCS, 	
-! 10.22.20 Cur_Analysis: existing SNODEP based analysis
-	!"/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
-	anl_inp_path = TRIM(CURRENT_ANALYSIS_PATH)//"snow."// &
-				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-				   TRIM(h_str)// "0000.sfcanl_data."//TILE_NUM//".nc"
-	Call READ_Analysis_Data(anl_inp_path, p_tN, LENSFC, SNOANL_Cur, SWDANL_Cur)
+! ! 10.22.20 Cur_Analysis: existing SNODEP based analysis
+! 	!"/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Cur_Analysis/"
+! 	anl_inp_path = TRIM(CURRENT_ANALYSIS_PATH)//"snow."// &
+! 				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
+! 				   TRIM(h_str)// "0000.sfcanl_data."//TILE_NUM//".nc"
+! 	Call READ_Analysis_Data(anl_inp_path, p_tN, LENSFC, SNOANL_Cur, SWDANL_Cur)
 	
 	RLO_Tile = RLO
 	Where(RLO_Tile > 180) RLO_Tile = RLO_Tile - 360
@@ -1810,7 +165,7 @@ End do
 	endif
 	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/
 	ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
-					 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"
+					 TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"
 	dim_name = "Site_Id"	
 	call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
 					lat_min, lat_max, lon_min, lon_max, & 
@@ -1869,7 +224,7 @@ End do
 	  
 	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
 	ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"IMS.SNCOV."// &
-				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18.nc"                      !
+				   TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"                      !
 	! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
 	ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
 						   ".IMS.Indices."//TRIM(TILE_NUM)//".nc"			
@@ -1902,7 +257,8 @@ End do
 	ALLOCATE(SNOFCS_atGHCND(Num_Ghcnd))
 	ALLOCATE(Ele_GHCND(Num_Ghcnd)) 
 	ALLOCATE(index_back_atObs(Num_Ghcnd)) 
-    num_Eval = floor(0.05 * Num_Ghcnd)      ! using 5% of ghcnd locations for evaluation
+	 ! using PERCENT_OBS_WITHHELD % of ghcnd locations for evaluation
+    num_Eval = floor(0.01 * PERCENT_OBS_WITHHELD * Num_Ghcnd)     
 	ALLOCATE(index_back_atEval(num_Eval)) 
 	ALLOCATE(Obs_atEvalPts(num_Eval)) 
 	ALLOCATE(SNOFCS_atEvalPts(num_Eval)) 
@@ -1910,7 +266,7 @@ End do
 	ALLOCATE(Lon_atEvalPts(num_Eval)) 
 	ALLOCATE(innov_atEvalPts(num_Eval))
 	ALLOCATE(SNOANL_atEvalPts(num_Eval)) 	
-	ALLOCATE(SNOANL_Cur_atEvalPts(num_Eval)) 
+	! ALLOCATE(SNOANL_Cur_atEvalPts(num_Eval)) 
 	! ALLOCATE(SNOANL_atEvalPts(Num_Ghcnd)) 	
 	! ALLOCATE(SNOANL_Cur_atEvalPts(Num_Ghcnd)) 		
 	if(p_tRank == 0) then 
@@ -1960,11 +316,11 @@ End do
 	endif
 	if (myrank==0) PRINT*,'Finished observation operator for IMS'
 	
-	L_horz = 55.  !120.  !
-	h_ver = 800.  !1200.	!
-	obs_tolerance = 5.0
-	max_num_loc = 50   !100	!
-	ims_max_ele = 1500.
+	! L_horz = 55.  !120.  !
+	! h_ver = 800.  !1200.	!
+	! obs_tolerance = 5.0	
+	! ims_max_ele = 1500.
+	! max_num_loc = 50   !100	!
 	ims_assm_hour = 18
 	max_distance = 250.   !120.			!Km
 	!if (myrank==4) then 
@@ -2122,7 +478,7 @@ End do
 	else
 		SNOANL = anl_at_Grid / SNWDEN		!snwden_val 
 		SWDANL = anl_at_Grid
-		SNOANL_Cur = SWDANL_Cur
+		!SNOANL_Cur = SWDANL_Cur
 		!innov_at_Grid = innov_at_Grid / SNWDEN
 	endif	
 	if (print_deb) then
@@ -2138,13 +494,13 @@ End do
 	! copy values at eval points
 	innov_atEvalPts = IEEE_VALUE(innov_atEvalPts, IEEE_QUIET_NAN)
 	SNOANL_atEvalPts = IEEE_VALUE(SNOANL_atEvalPts, IEEE_QUIET_NAN)
-	SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
+	!SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
 	Do jndx = 1, num_Eval
 		if ((index_back_atEval(jndx) > 0) .and. &
 		    (NINT(VETFCS(jndx)) /= veg_type_landice)) then  !10.21.20: exclude if land-ice	
 				innov_atEvalPts(jndx) = innov_at_Grid(index_back_atEval(jndx))
 				SNOANL_atEvalPts(jndx) = anl_at_Grid(index_back_atEval(jndx))
-				SNOANL_Cur_atEvalPts(jndx) = SNOANL_Cur(index_back_atEval(jndx))
+				!SNOANL_Cur_atEvalPts(jndx) = SNOANL_Cur(index_back_atEval(jndx))
 		endif
 	End do
 	! Do jndx = 1, Num_Ghcnd
@@ -2166,12 +522,12 @@ End do
 			    !       Num_Ghcnd, Lat_GHCND, Lon_GHCND, SNWD_GHCND, &
 			    ! SNOFCS_atGHCND, SNOFCS_atGHCND, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)
 			    num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-			SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
+			SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts) !, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
 
 998 CONTINUE
 	DEALLOCATE(SNWD_GHCND, SNOFCS_atGHCND, Lat_GHCND, Lon_GHCND, Ele_GHCND)  !, index_back_atGHCND)
 	DEALLOCATE(Obs_atEvalPts, SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts)
-	DEALLOCATE(SNOANL_Cur_atEvalPts) 
+	!DEALLOCATE(SNOANL_Cur_atEvalPts) 
 	DEALLOCATE(index_back_atObs, index_back_atEval, Lat_atEvalPts, Lon_atEvalPts) !, Ele_atEvalPts)
 	!DEALLOCATE(SNCOV_IMS, Lat_IMS, Lon_IMS, SNOFCS_atIMS, SWDFCS_atIMS)
 999 CONTINUE
@@ -2345,7 +701,7 @@ End subroutine map_outputs_toObs
  Subroutine Write_DA_Outputs(output_file, idim, jdim, lensfc, myrank,   &
                                  snoforc, snoanl, snwdforc, snwdanal, inovatgrid, SNCOV_IMS, &
                                  num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-            SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
+            SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts) !, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
 	!------------------------------------------------------------------
 	! Write DA ouputs: 
 	! forecast SWE
@@ -2362,7 +718,7 @@ End subroutine map_outputs_toObs
 	integer, intent(in)         :: num_Eval
 	real, intent(in)    :: Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval), Obs_atEvalPts(num_Eval)
 	real, intent(in)    :: SNOFCS_atEvalPts(num_Eval), SNOANL_atEvalPts(num_Eval) 
-	real, intent(in)    :: innov_atEvalPts(num_Eval), SNOANL_Cur_atEvalPts(num_Eval)
+	real, intent(in)    :: innov_atEvalPts(num_Eval)  !, SNOANL_Cur_atEvalPts(num_Eval)
 
 	integer                     :: fsize=65536, inital=0
 	integer                     :: header_buffer_val = 16384
@@ -2372,7 +728,7 @@ End subroutine map_outputs_toObs
 	integer                     :: id_x, id_y, id_time
 	integer                     :: id_swe_forc, id_swe, id_snwdf, id_snwd, id_innov, id_imscov   !, id_anlscov
 	integer       :: id_lateval, id_loneval, id_obseval, id_forceval
-	integer       :: id_anleval, id_cur_anleval, id_innoveval   !, id_anlscov
+	integer       :: id_anleval, id_innoveval   !, id_cur_anleval, , id_anlscov
 
 	integer                     :: myrank
 
@@ -2510,12 +866,12 @@ End subroutine map_outputs_toObs
 	error = nf90_put_att(ncid, id_anleval, "units", "mm")
 	call netcdf_err(error, 'DEFINING SNOANL_atEvalPts UNITS' )
 
-	error = nf90_def_var(ncid, 'SNOANL_Cur_atEvalPts', NF90_DOUBLE, dim_eval, id_cur_anleval)
-	call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts' )
-	error = nf90_put_att(ncid, id_cur_anleval, "long_name", "Current Analysis at Evaluation Points")
-	call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts LONG NAME' )
-	error = nf90_put_att(ncid, id_cur_anleval, "units", "mm")
-	call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts UNITS' )
+	! error = nf90_def_var(ncid, 'SNOANL_Cur_atEvalPts', NF90_DOUBLE, dim_eval, id_cur_anleval)
+	! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts' )
+	! error = nf90_put_att(ncid, id_cur_anleval, "long_name", "Current Analysis at Evaluation Points")
+	! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts LONG NAME' )
+	! error = nf90_put_att(ncid, id_cur_anleval, "units", "mm")
+	! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts UNITS' )
 	
 	error = nf90_def_var(ncid, 'Innov_atEvalPts', NF90_DOUBLE, dim_eval, id_innoveval)
 	call netcdf_err(error, 'DEFINING Innov_atEvalPts' )
@@ -2601,8 +957,8 @@ End subroutine map_outputs_toObs
 	error = nf90_put_var( ncid, id_anleval, SNOANL_atEvalPts)
 	call netcdf_err(error, 'WRITING SNOANL_atEvalPts RECORD' )
 
-	error = nf90_put_var( ncid, id_cur_anleval, SNOANL_Cur_atEvalPts)
-	call netcdf_err(error, 'WRITING SNOANL_Cur_atEvalPts RECORD' )
+	! error = nf90_put_var( ncid, id_cur_anleval, SNOANL_Cur_atEvalPts)
+	! call netcdf_err(error, 'WRITING SNOANL_Cur_atEvalPts RECORD' )
 
 	error = nf90_put_var( ncid, id_innoveval, innov_atEvalPts)
 	call netcdf_err(error, 'WRITING innov_atEvalPts RECORD' )
