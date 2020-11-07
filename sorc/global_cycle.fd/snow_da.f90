@@ -30,7 +30,7 @@ MODULE M_DA
     CONTAINS
        
     subroutine compute_covariances(RLA_jndx, RLO_jndx, Orog_jndx,  SNOforc_jndx,  &
-        Lat_Obs, Lon_Obs, Ele_Obs, num_Obs,    				&
+        Lat_Obs, Lon_Obs, Ele_Obs, num_Obs,                             &
         Stdev_back, Stdev_Obs_depth, Stdev_Obs_ims,         &
         L_horz, h_ver,                                      &   !L_horz in Km, h_ver in m
         assim_IMS,                                          &
@@ -40,33 +40,33 @@ MODULE M_DA
         !USE intrinsic::ieee_arithmetic
         integer, parameter :: dp = kind(1.d0)
 
-        Real, Intent(In) 	:: RLA_jndx, RLO_jndx, Orog_jndx, SNOforc_jndx
-        Real, Intent(In) 	:: Stdev_back, Stdev_Obs_depth, Stdev_Obs_ims 
-        Real, Intent(In) 	:: Lon_Obs(num_Obs), Lat_Obs(num_Obs), Ele_Obs(num_Obs)
-        Real, Intent(In) 	:: L_horz, h_ver  !L_horz in Km, h_ver in m
+        Real, Intent(In)        :: RLA_jndx, RLO_jndx, Orog_jndx, SNOforc_jndx
+        Real, Intent(In)        :: Stdev_back, Stdev_Obs_depth, Stdev_Obs_ims 
+        Real, Intent(In)        :: Lon_Obs(num_Obs), Lat_Obs(num_Obs), Ele_Obs(num_Obs)
+        Real, Intent(In)        :: L_horz, h_ver  !L_horz in Km, h_ver in m
         Integer, Intent(In) :: num_Obs
         LOGICAL, Intent(In) :: assim_IMS
 
         Real(dp), Intent(Out)    :: B_cov_mat(num_obs,num_obs), b_cov_vect(num_obs)
         Real(dp), Intent(Out)    :: O_cov_mat(num_obs,num_obs), W_wght_vect(num_obs) !6.10.20: W_wght_vect(num_obs, 1)
         
-        Real(dp)    :: W_wght_vect_intr(1, num_obs)	
+        Real(dp)    :: W_wght_vect_intr(1, num_obs)     
         
         Integer :: indx, jndx, zndx    
         Real    :: rjk_distArr(num_Obs, num_Obs), zjk_distArr(num_Obs, num_Obs)    
         Real    :: l_distArr(num_Obs), h_distArr(num_Obs), haversinArr(num_Obs)
         Real(dp)    :: Innov_cov_mat(num_obs,num_obs), Innov_cov_mat_inv(num_obs,num_obs)
-        Real 	:: d_latArr(num_Obs), d_lonArr(num_Obs)
+        Real    :: d_latArr(num_Obs), d_lonArr(num_Obs)
         Real    ::  Lon_Obs_2(num_Obs)      !RLO_2_jndx,
-        Real 	:: RLA_rad_jndx, RLO_rad_jndx
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: RLA_rad_jndx, RLO_rad_jndx
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
-        Real, Parameter		:: snforc_tol = 0.001
-        Real, Parameter		:: Bcov_scale_factor = 0.1
+        Real, Parameter         :: earth_rad = 6371.
+        Real, Parameter         :: snforc_tol = 0.001
+        Real, Parameter         :: Bcov_scale_factor = 0.1
         ! PRINT*, "PI: ", PI_16
-        ! PRINT*, "PI / 180: ", pi_div_180	
+        ! PRINT*, "PI / 180: ", pi_div_180      
         
         !Lon between -180 and 180 for some inputs
         Lon_Obs_2 = Lon_Obs
@@ -74,7 +74,7 @@ MODULE M_DA
         ! Do zndx = 1, num_Obs 
         !     if (Lon_Obs(zndx) < 0) Lon_Obs_2(zndx) = 360. + Lon_Obs(zndx)
         ! end do   
-        ! deg to rad	
+        ! deg to rad    
         RLA_rad_jndx =  pi_div_180 * RLA_jndx
         RLO_rad_jndx =  pi_div_180 * RLO_jndx
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
@@ -86,6 +86,7 @@ MODULE M_DA
         Do indx = 1, num_Obs
             O_cov_mat(indx, indx) = Stdev_Obs_depth * Stdev_Obs_depth
         end do
+!CSDCSD - change to have >1 IMS obs.
         if (assim_IMS) O_cov_mat(num_Obs, num_Obs) = Stdev_Obs_ims * Stdev_Obs_ims
 
         if (print_debug) then
@@ -112,7 +113,7 @@ MODULE M_DA
             ! Do indx = 1, num_Obs 
             !     if (haversinArr(indx) > 1) haversinArr(indx) = 1 ! ensure numerical errors don't make h>1
             ! end do
-            rjk_distArr(jndx,:) = 2 * earth_rad * asin(sqrt(haversinArr))	! rjk, k = 1, Num obs for a given j
+            rjk_distArr(jndx,:) = 2 * earth_rad * asin(sqrt(haversinArr))       ! rjk, k = 1, Num obs for a given j
             zjk_distArr(jndx,:) = Ele_Obs(jndx) - Ele_Obs       ! zjk, k = 1, Num obs for a given j
         End do
         !Corr_j_k = (1+rjk/L)exp(-rjk/L)exp(-(zjk/h)^2)
@@ -144,7 +145,7 @@ MODULE M_DA
         ! Do indx = 1, num_Obs 
         !     if (haversinArr(indx) > 1) haversinArr(indx) = 1 ! ensure numerical errors don't make h>1
         ! end do
-        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))	! rjk, k = 1, Num obs for a given j
+        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))     ! rjk, k = 1, Num obs for a given j
         h_distArr = Orog_jndx - Ele_Obs       ! zjk, k = 1, Num obs for a given j
         if (print_debug) then
             print*, "Horz Dist for Back corr at obs pts and model grid"
@@ -215,11 +216,11 @@ MODULE M_DA
     END SUBROUTINE Snow_DA_OI
     
     Subroutine snow_DA_EnSRF(RLA_jndx, RLO_jndx, Orog_jndx,   &
-        Lat_Obs, Lon_Obs, Ele_Obs,     				&
+        Lat_Obs, Lon_Obs, Ele_Obs,                              &
         L_horz, h_ver,                                      &   !L_horz in Km, h_ver in m
         assim_IMS, rcov_localize,                     &
         jindx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
+        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,   &
         Stdev_Obs_depth, Stdev_Obs_ims,                  &
         obs_Array,                          &
         obs_Innov, innov_atGrid_ensM, anl_at_Grid_ens)
@@ -228,16 +229,16 @@ MODULE M_DA
         !USE intrinsic::ieee_arithmetic
         integer, parameter :: dp = kind(1.d0)
 
-        Real, Intent(In) 	:: RLA_jndx, RLO_jndx, Orog_jndx
-        Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs), Ele_Obs(num_Obs)
-        Real, Intent(In) 	:: L_horz, h_ver  !L_horz in Km, h_ver in m
+        Real, Intent(In)        :: RLA_jndx, RLO_jndx, Orog_jndx
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs), Ele_Obs(num_Obs)
+        Real, Intent(In)        :: L_horz, h_ver  !L_horz in Km, h_ver in m
 
         LOGICAL, Intent(In) :: assim_IMS, rcov_localize
         Integer, Intent(In) :: jindx, ens_size, LENSFC 
-        Real, Intent(In) 	:: SNOFCS_Inp_Ens(ens_size, LENSFC)
+        Real, Intent(In)        :: SNOFCS_Inp_Ens(ens_size, LENSFC)
         Integer, Intent(In) :: num_Obs_1, num_Obs, loc_nearest_Obs(num_Obs_1)        
-        Real, Intent(In) 	:: SNOFCS_atObs_ens(ens_size, num_Obs_1)
-        Real, Intent(In) 	:: Stdev_Obs_depth, Stdev_Obs_ims
+        Real, Intent(In)        :: SNOFCS_atObs_ens(ens_size, num_Obs_1)
+        Real, Intent(In)        :: Stdev_Obs_depth, Stdev_Obs_ims
         REAL, INTENT(In)    :: obs_Array(num_Obs)
 
         Real, INTENT(Out)   :: obs_Innov(num_Obs)
@@ -262,18 +263,18 @@ MODULE M_DA
         Real    :: l_distArr(num_Obs), h_distArr(num_Obs), haversinArr(num_Obs)
         Real(dp)    :: R_cov_loc(num_obs)  !,num_obs)
         
-        Real 	:: d_latArr(num_Obs), d_lonArr(num_Obs)
+        Real    :: d_latArr(num_Obs), d_lonArr(num_Obs)
         Real    ::  Lon_Obs_2(num_Obs)      !RLO_2_jndx,
-        Real 	:: RLA_rad_jndx, RLO_rad_jndx
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: RLA_rad_jndx, RLO_rad_jndx
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
+        Real, Parameter         :: earth_rad = 6371.
         
         !Lon between -180 and 180 for some inputs
         Lon_Obs_2 = Lon_Obs
         Where(Lon_Obs_2 < 0) Lon_Obs_2 = 360. + Lon_Obs_2
-	
+        
         RLA_rad_jndx =  pi_div_180 * RLA_jndx
         RLO_rad_jndx =  pi_div_180 * RLO_jndx
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
@@ -283,7 +284,7 @@ MODULE M_DA
         d_lonArr = (RLO_rad_jndx - Lon_Obs_rad) / 2.
         haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad) * cos(RLA_rad_jndx) * sin(d_lonArr)**2
         Where (haversinArr > 1) haversinArr = 1.
-        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))	! rjk, k = 1, Num obs for a given j
+        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))     ! rjk, k = 1, Num obs for a given j
         h_distArr = Orog_jndx - Ele_Obs       ! zjk, k = 1, Num obs for a given j
         if (print_debug) then
             print*, "Horz Dist for Back corr at obs pts and model grid"
@@ -305,7 +306,6 @@ MODULE M_DA
             Xh_state_atObs(zndx, :) = SNOFCS_atObs_ens(:, loc_nearest_Obs(zndx))
         End do
         if(assim_IMS) Xh_state_atObs(num_Obs, :) = SNOFCS_Inp_Ens(:, jindx)
-        !SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) / COUNT (.not. IEEE_IS_NAN(SNWDEN))
         X_ave_State = SUM(X_state(1,:)) / ens_size
         Do zndx = 1, num_Obs
             Xh_ave_State(zndx) = SUM(Xh_state_atObs(zndx, :)) / ens_size
@@ -398,11 +398,11 @@ MODULE M_DA
     End Subroutine snow_DA_EnSRF
 
     Subroutine snow_DA_EnKF_LocCov(RLA_jndx, RLO_jndx, Orog_jndx,   &
-        Lat_Obs, Lon_Obs, Ele_Obs,     				&
+        Lat_Obs, Lon_Obs, Ele_Obs,                              &
         L_horz, h_ver,                                      &   !L_horz in Km, h_ver in m
         assim_IMS,                    &
         jindx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
+        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,   &
         Stdev_Obs_depth, Stdev_Obs_ims,                  &
         obs_Array,                          &
         obs_Innov_ens, innov_at_Grid_ens, anl_at_Grid_ens)
@@ -411,16 +411,16 @@ MODULE M_DA
         !USE intrinsic::ieee_arithmetic
         integer, parameter :: dp = kind(1.d0)
 
-        Real, Intent(In) 	:: RLA_jndx, RLO_jndx, Orog_jndx
-        Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs), Ele_Obs(num_Obs)
-        Real, Intent(In) 	:: L_horz, h_ver  !L_horz in Km, h_ver in m
+        Real, Intent(In)        :: RLA_jndx, RLO_jndx, Orog_jndx
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs), Ele_Obs(num_Obs)
+        Real, Intent(In)        :: L_horz, h_ver  !L_horz in Km, h_ver in m
 
         LOGICAL, Intent(In) :: assim_IMS
         Integer, Intent(In) :: jindx, ens_size, LENSFC 
-        Real, Intent(In) 	:: SNOFCS_Inp_Ens(ens_size, LENSFC)
+        Real, Intent(In)        :: SNOFCS_Inp_Ens(ens_size, LENSFC)
         Integer, Intent(In) :: num_Obs_1, num_Obs, loc_nearest_Obs(num_Obs_1)        
-        Real, Intent(In) 	:: SNOFCS_atObs_ens(ens_size, num_Obs_1)
-        Real, Intent(In) 	:: Stdev_Obs_depth, Stdev_Obs_ims
+        Real, Intent(In)        :: SNOFCS_atObs_ens(ens_size, num_Obs_1)
+        Real, Intent(In)        :: Stdev_Obs_depth, Stdev_Obs_ims
         REAL, INTENT(In)    :: obs_Array(num_Obs)
 
         Real, INTENT(Out)   :: obs_Innov_ens(num_Obs, ens_size)
@@ -442,18 +442,18 @@ MODULE M_DA
         Real    :: l_distArr(num_Obs), h_distArr(num_Obs), haversinArr(num_Obs)
         Real(dp)    :: R_cov_loc(num_obs)  !,num_obs)
         
-        Real 	:: d_latArr(num_Obs), d_lonArr(num_Obs)
+        Real    :: d_latArr(num_Obs), d_lonArr(num_Obs)
         Real    ::  Lon_Obs_2(num_Obs)      !RLO_2_jndx,
-        Real 	:: RLA_rad_jndx, RLO_rad_jndx
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: RLA_rad_jndx, RLO_rad_jndx
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
+        Real, Parameter         :: earth_rad = 6371.
         
         !Lon between -180 and 180 for some inputs
         Lon_Obs_2 = Lon_Obs
         Where(Lon_Obs_2 < 0) Lon_Obs_2 = 360. + Lon_Obs_2
-	
+        
         RLA_rad_jndx =  pi_div_180 * RLA_jndx
         RLO_rad_jndx =  pi_div_180 * RLO_jndx
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
@@ -464,7 +464,7 @@ MODULE M_DA
         !     d_lonArr = (Lon_Obs_rad(jndx) - Lon_Obs_rad) / 2.
         !     haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad) * cos(Lat_Obs_rad(jndx)) * sin(d_lonArr)**2
         !     Where (haversinArr > 1) haversinArr = 1
-        !     rjk_distArr(jndx,:) = 2 * earth_rad * asin(sqrt(haversinArr))	! rjk, k = 1, Num obs for a given j
+        !     rjk_distArr(jndx,:) = 2 * earth_rad * asin(sqrt(haversinArr))     ! rjk, k = 1, Num obs for a given j
         !     zjk_distArr(jndx,:) = Ele_Obs(jndx) - Ele_Obs       ! zjk, k = 1, Num obs for a given j
         ! End do
         !Corr_j_k = (1+rjk/L)exp(-rjk/L)exp(-(zjk/h)^2)
@@ -481,7 +481,7 @@ MODULE M_DA
         d_lonArr = (RLO_rad_jndx - Lon_Obs_rad) / 2.
         haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad) * cos(RLA_rad_jndx) * sin(d_lonArr)**2
         Where (haversinArr > 1) haversinArr = 1.
-        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))	! rjk, k = 1, Num obs for a given j
+        l_distArr = 2 * earth_rad * asin(sqrt(haversinArr))     ! rjk, k = 1, Num obs for a given j
         h_distArr = Orog_jndx - Ele_Obs       ! zjk, k = 1, Num obs for a given j
         if (print_debug) then
             print*, "Horz Dist for Back corr at obs pts and model grid"
@@ -503,7 +503,6 @@ MODULE M_DA
             Xh_state_atObs(zndx, :) = SNOFCS_atObs_ens(:, loc_nearest_Obs(zndx))
         End do
         if(assim_IMS) Xh_state_atObs(num_Obs, :) = SNOFCS_Inp_Ens(:, jindx)
-        !SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) / COUNT (.not. IEEE_IS_NAN(SNWDEN))
         X_ave_State = SUM(X_state(1,:)) / ens_size
         Do zndx = 1, num_Obs
             Xh_ave_State(zndx) = SUM(Xh_state_atObs(zndx, :)) / ens_size
@@ -581,7 +580,7 @@ MODULE M_DA
 
     Subroutine snow_DA_EnKF(assim_IMS,                    &
         jindx, ens_size, LENSFC, SNOFCS_Inp_Ens,          &
-        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,	 &
+        num_Obs_1, num_Obs, loc_nearest_Obs, SNOFCS_atObs_ens,   &
         Stdev_Obs_depth, Stdev_Obs_ims,                  &
         obs_Array,                          &
         obs_Innov_ens, innov_at_Grid_ens, anl_at_Grid_ens)
@@ -592,10 +591,10 @@ MODULE M_DA
 
         LOGICAL, Intent(In) :: assim_IMS
         Integer, Intent(In) :: jindx, ens_size, LENSFC 
-        Real, Intent(In) 	:: SNOFCS_Inp_Ens(ens_size, LENSFC)
+        Real, Intent(In)        :: SNOFCS_Inp_Ens(ens_size, LENSFC)
         Integer, Intent(In) :: num_Obs_1, num_Obs, loc_nearest_Obs(num_Obs_1)        
-        Real, Intent(In) 	:: SNOFCS_atObs_ens(ens_size, num_Obs_1)
-        Real, Intent(In) 	:: Stdev_Obs_depth, Stdev_Obs_ims
+        Real, Intent(In)        :: SNOFCS_atObs_ens(ens_size, num_Obs_1)
+        Real, Intent(In)        :: Stdev_Obs_depth, Stdev_Obs_ims
         REAL, INTENT(In)    :: obs_Array(num_Obs)
 
         Real, INTENT(Out)   :: obs_Innov_ens(num_Obs, ens_size)
@@ -619,7 +618,6 @@ MODULE M_DA
             Xh_state_atObs(zndx, :) = SNOFCS_atObs_ens(:, loc_nearest_Obs(zndx))
         End do
         if(assim_IMS) Xh_state_atObs(num_Obs, :) = SNOFCS_Inp_Ens(:, jindx)
-        !SUM(SNWDEN, Mask = (.not. IEEE_IS_NAN(SNWDEN))) / COUNT (.not. IEEE_IS_NAN(SNWDEN))
         X_ave_State = SUM(X_state(1,:)) / ens_size
         Do zndx = 1, num_Obs
             Xh_ave_State(zndx) = SUM(Xh_state_atObs(zndx, :)) / ens_size
@@ -754,7 +752,7 @@ MODULE M_DA
     end function inv
 
     subroutine nearest_Observations_Locations(RLA_jndx, RLO_jndx,    &
-        Lat_Obs, Lon_Obs, num_Obs, max_distance, max_num_loc,  				&
+        Lat_Obs, Lon_Obs, num_Obs, max_distance, max_num_loc,                           &
         Stdev_back, Stdev_Obs_depth, obs_tolerance,                 &
         SNOFCS_atObs, OBS_atOBs,                                 &
         Loc_backSt_atObs,  num_loc) !,      &LENSFC,
@@ -762,11 +760,11 @@ MODULE M_DA
         !  SWE_atObs  SWE_back
         IMPLICIT NONE
 
-        Real, Intent(In) 	:: RLA_jndx, RLO_jndx  ! don't want to alter these
-        Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs)
+        Real, Intent(In)        :: RLA_jndx, RLO_jndx  ! don't want to alter these
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)
         Integer, Intent(In) :: num_Obs, max_num_loc
-        Real, Intent(In)	:: max_distance   ! radius_of_influence
-        Real, Intent(In) 	:: Stdev_back, Stdev_Obs_depth, obs_tolerance
+        Real, Intent(In)        :: max_distance   ! radius_of_influence
+        Real, Intent(In)        :: Stdev_back, Stdev_Obs_depth, obs_tolerance
         Real, Intent(In)    :: SNOFCS_atObs(num_Obs)
         Real, Intent(In)    :: OBS_atOBs(num_Obs)
         Integer, Allocatable, Intent(Out)    :: Loc_backSt_atObs(:)
@@ -775,13 +773,13 @@ MODULE M_DA
         
         Integer :: indx, jndx, zndx, num_loc_counter        
         Real    :: distArr(num_Obs), haversinArr(num_Obs)
-        Real 	:: d_latArr(num_Obs), d_lonArr(num_Obs)
+        Real    :: d_latArr(num_Obs), d_lonArr(num_Obs)
         Real    :: Lon_Obs_2(num_Obs)   !RLO_2_jndx, 
-        Real 	:: RLA_rad_jndx, RLO_rad_jndx
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: RLA_rad_jndx, RLO_rad_jndx
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
+        Real, Parameter         :: earth_rad = 6371.
         Real                :: innov_criteria
         Real, Allocatable   :: dist_atObs(:)
         Real, Allocatable   :: dist_atObs_dummy(:)
@@ -795,7 +793,7 @@ MODULE M_DA
         !Integer              :: loc_indices(max_num_loc)
         
         ! PRINT*, "PI: ", PI_16
-        ! PRINT*, "PI / 180: ", pi_div_180	
+        ! PRINT*, "PI / 180: ", pi_div_180      
     
         !Do jndx = 1, LENSFC 
         !if (RLO_jndx > 180) RLO_2_jndx = RLO_jndx - 360.0 
@@ -810,7 +808,7 @@ MODULE M_DA
         ! at each obs point compute its distance from RLA/RLO pairs 
         ! then find the position of the minimum
         !print*, " here 2"
-        ! shortest distance over sphere using great circle distance 	
+        ! shortest distance over sphere using great circle distance     
         RLA_rad_jndx =  pi_div_180 * RLA_jndx
         RLO_rad_jndx =  pi_div_180 * RLO_jndx
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
@@ -830,16 +828,17 @@ MODULE M_DA
         ! end do
         Where (haversinArr < 0) haversinArr = 0.
         ! Do indx = 1, num_Obs 
-		! 	if (haversinArr(indx) < 0) haversinArr(indx) = 0 ! ensure <0
-		! end do
+                !       if (haversinArr(indx) < 0) haversinArr(indx) = 0 ! ensure <0
+                ! end do
         distArr = 2 * earth_rad * asin(sqrt(haversinArr))
         
         innov_criteria =  obs_tolerance * sqrt(Stdev_back**2 + Stdev_Obs_depth**2)
         ! 4.15.20: can you do the following without loop?       
         num_loc_counter = 0
-        Do indx = 1, num_Obs	
+        Do indx = 1, num_Obs    
             if((distArr(indx) < max_distance) .AND. &
                (.NOT. IEEE_IS_NAN(SNOFCS_atObs(indx))) .AND. &
+! CSD - why are we excluding 0s? 
                (.NOT. IEEE_IS_NAN(OBS_atOBs(indx)/OBS_atOBs(indx))) .AND. &    ! this excludes 0's ?
                (abs(OBS_atOBs(indx) - SNOFCS_atObs(indx)) < innov_criteria)) then                
                 num_loc_counter = num_loc_counter + 1
@@ -849,7 +848,7 @@ MODULE M_DA
         Allocate(Loc_backSt_atObs_dummy(num_loc))
         Allocate(dist_atObs_dummy(num_loc))
         jndx = 1
-        Do indx = 1, num_Obs	
+        Do indx = 1, num_Obs    
             if((distArr(indx) < max_distance) .AND. &
                (.NOT. IEEE_IS_NAN(SNOFCS_atObs(indx))) .AND. &
                (.NOT. IEEE_IS_NAN(OBS_atOBs(indx)/OBS_atOBs(indx))) .AND. &
@@ -882,7 +881,7 @@ MODULE M_DA
             ! print*, "unsorted locations ",  Loc_backSt_atObs_dummy
             ! print*
             ! print*, "Sorted locations ",  Loc_backSt_atObs
-            num_loc = max_num_loc			
+            num_loc = max_num_loc                       
             Deallocate(dist_atObs)
         else
             Allocate(Loc_backSt_atObs(num_loc)) 
@@ -896,7 +895,7 @@ MODULE M_DA
     End subroutine nearest_Observations_Locations
 
     subroutine select_max_num_obs(dist_atObs, SNOFCS_atObs, OBS_atOBs, &
-        num_loc, max_num_loc,  				&
+        num_loc, max_num_loc,                           &
         out_SNOFCS_atObs, out_OBS_atOBs) 
 
         IMPLICIT NONE
@@ -932,30 +931,37 @@ MODULE M_DA
     End subroutine select_max_num_obs
 
      ! Gets obs snow depth from IMS based on exponential/log 'depletion curve' 
-    SUBROUTINE Observation_Operator_IMS_fSCA(SNCOV_IMS, SNWDEN, VETFCS_in, assim_SWE, LENSFC, 		&
-                                              SNWD_IMS_at_Grid) !,      &
+    subroutine CalcSWEFromSnowCover(SNCOV_IMS, VETFCS_in, LENSFC, SWE_IMS_at_Grid)
+
+! CSD - even though it's labelled as snow depth in the Noah code, this
+! routine is performed on SWE, not SND. So I think your output should be SWE.
+! Also, this is not an observation operator, hence the rename
+! do my changeg affect your inversion?
         
         IMPLICIT NONE
         !
-        Real, Intent(In) 	:: SNCOV_IMS(LENSFC), SNWDEN(LENSFC), VETFCS_in(LENSFC)
-        Logical, Intent(In)	:: assim_SWE
-        INTEGER, Intent(In)	:: LENSFC
-        Real, Intent(Out) 	:: SNWD_IMS_at_Grid(LENSFC)
+        Real, Intent(In)        :: SNCOV_IMS(LENSFC),  VETFCS_in(LENSFC)
+        INTEGER, Intent(In)     :: LENSFC
+        Real, Intent(Out)       :: SWE_IMS_at_Grid(LENSFC)
         
-        INTEGER             :: VETFCS(LENSFC)
+        INTEGER            :: VETFCS(LENSFC)
         REAL               :: snupx(30), SNUP, SALP, RSNOW
-        Integer 		   :: indx, vtype_int
-    
+        Integer                    :: indx, vtype_int
+
+        Real, parameter    :: ims_threshold=0.5 ! threshold for converting IMS fSCA to binary 1, 0 values 
+
         !Fill background values to nan (to differentiate those that don't have value)
-        SNWD_IMS_at_Grid = IEEE_VALUE(SNWD_IMS_at_Grid, IEEE_QUIET_NAN)
-    
-        ! call debug_print("Here ", 1.)
-    
+        SWE_IMS_at_Grid = IEEE_VALUE(SWE_IMS_at_Grid, IEEE_QUIET_NAN)
+   
+        ! NOTE: this is an empirical inversion of   snfrac rotuine in Noah 
+        !  should really have a land model check in here. 
+
         !This is for the IGBP veg classification scheme.
-        snupx = (/0.080, 0.080, 0.080, 0.080, 0.080, 0.020, 	&
-                0.020, 0.060, 0.040, 0.020, 0.010, 0.020,			&
-                0.020, 0.020, 0.013, 0.013, 0.010, 0.020,			&
-                0.020, 0.020, 0.000, 0.000, 0.000, 0.000,			&
+        ! SWE at which snow cover reaches 100%
+        snupx = (/0.080, 0.080, 0.080, 0.080, 0.080, 0.020,     &
+                0.020, 0.060, 0.040, 0.020, 0.010, 0.020,                       &
+                0.020, 0.020, 0.013, 0.013, 0.010, 0.020,                       &
+                0.020, 0.020, 0.000, 0.000, 0.000, 0.000,                       &
                 0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
     
         SALP = -4.0
@@ -971,48 +977,39 @@ MODULE M_DA
                 endif
     
                 if (SNCOV_IMS(indx) >= 1.0) then
-                    SNWD_IMS_at_Grid(indx) = SNUP * 1000.0  ! units mm
+                    RSNOW = 1.
                 elseif (SNCOV_IMS(indx) < 0.001) then
-                    SNWD_IMS_at_Grid(indx) = 0.0  ! units mm
+                    RSNOW = 0.0 
                 else
-                    RSNOW = LOG(1. - SNCOV_IMS(indx)) / SALP
-                    if (RSNOW > 1.) RSNOW = 1.
-                    SNWD_IMS_at_Grid(indx) = RSNOW * SNUP * 1000.   ! units mm
-                endif
-    
+                    RSNOW = min(LOG(1. - SNCOV_IMS(indx)) / SALP, 1.0) 
+                endif  
+                ! return SD in mm (or SWE if snowdens = 1)
+                SWE_IMS_at_Grid(indx) = RSNOW * SNUP * 1000. * ims_threshold
             endif
-        end do	
-        ! print*, "IMS Sndpth at model grids"
-        ! print*, SNWD_IMS_at_Grid
-        ! print*
-        ! assim_SWE = True >> swe assimilated; SNOFCS  = SWDFCS / SNWDEN
-        if (assim_SWE) SNWD_IMS_at_Grid = SNWD_IMS_at_Grid / SNWDEN
-        ! print*, "IMS SWE at model grids"
-        ! print*, SNWD_IMS_at_Grid
-    
+        end do  
         RETURN
     
-    END SUBROUTINE Observation_Operator_IMS_fSCA
+    END SUBROUTINE CalcSWEFromSnowCover
     
      ! Gets obs snow depth from IMS based on threshold fSCA 
-    SUBROUTINE Observation_Operator_IMS_fSCA_Threshold(SNCOV_IMS, SNOFCS, SNWDEN, assim_SWE,	   &
-                                LENSFC, ims_threshold, 		&
-                                SNWD_IMS_at_Grid) !,      &
+    SUBROUTINE Observation_Operator_IMS_fSCA_Threshold(SNCOV_IMS, SNOFCS, SNWDEN, assim_SWE,       &
+                                LENSFC, ims_threshold,          &
+                                SND_IMS_at_Grid) !,      &
     
         IMPLICIT NONE
         !
-        Real, Intent(In) 	:: SNCOV_IMS(LENSFC), SNOFCS(LENSFC), SNWDEN(LENSFC)
-        Logical				:: assim_SWE
-        INTEGER 			:: LENSFC
+        Real, Intent(In)        :: SNCOV_IMS(LENSFC), SNOFCS(LENSFC), SNWDEN(LENSFC)
+        Logical                         :: assim_SWE
+        INTEGER                         :: LENSFC
         Real, Intent(In)    :: ims_threshold
     
-        Real, Intent(Out) 	:: SNWD_IMS_at_Grid(LENSFC)
+        Real, Intent(Out)       :: SND_IMS_at_Grid(LENSFC)
         
         INTEGER :: indx
-        Real, Parameter		:: SWE_Tolerance = 0.001    ! smallest swe value
+        Real, Parameter         :: SWE_Tolerance = 0.001    ! smallest swe value
     
         !Fill background values to nan (to differentiate those that don't have value)
-        SNWD_IMS_at_Grid = IEEE_VALUE(SNWD_IMS_at_Grid, IEEE_QUIET_NAN)
+        SND_IMS_at_Grid = IEEE_VALUE(SND_IMS_at_Grid, IEEE_QUIET_NAN)
     
         ! call debug_print("Here ", 1.)
     
@@ -1020,22 +1017,22 @@ MODULE M_DA
             if (.NOT. IEEE_IS_NAN(SNCOV_IMS(indx))) then
                 if (SNCOV_IMS(indx) >= ims_threshold) then
                     ! ims snow, model no snow => obs=50 mm
-                    if (SNOFCS(indx) < SWE_Tolerance) SNWD_IMS_at_Grid(indx) = 50.
+                    if (SNOFCS(indx) < SWE_Tolerance) SND_IMS_at_Grid(indx) = 50.
                     ! ims snow, model snow => no assimilation
                 else  ! IMS fSCA < thresh => Ims obs = 0
-                    SNWD_IMS_at_Grid(indx) = 0.
-                endif   ! all others nan	
+                    SND_IMS_at_Grid(indx) = 0.
+                endif   ! all others nan        
             endif
         end do
         
         ! print*, "IMS Sndpth at model grids"
-        ! print*, SNWD_IMS_at_Grid
+        ! print*, SND_IMS_at_Grid
         ! print*
         ! assim_SWE = True >> swe assimilated; SNOFCS  = SWDFCS / SNWDEN
-        if (assim_SWE) SNWD_IMS_at_Grid = SNWD_IMS_at_Grid / SNWDEN
+        if (assim_SWE) SND_IMS_at_Grid = SND_IMS_at_Grid / SNWDEN
     
         ! print*, "IMS SWE at model grids"
-        ! print*, SNWD_IMS_at_Grid
+        ! print*, SND_IMS_at_Grid
     
         RETURN
     
@@ -1099,17 +1096,17 @@ MODULE M_DA
      SUBROUTINE Observation_Read_IMS_Full(inp_file, inp_file_indices, &
                     MYRANK, n_lat, n_lon, num_sub, &
                     SNCOV_IMS)
-                    ! Ele		&
+                    ! Ele               &
                     
         IMPLICIT NONE
     
-        include 'mpif.h'		  
+        include 'mpif.h'                  
     
         !ToDO: Can you use variable length char array ?
         CHARACTER(LEN=*), Intent(In)   :: inp_file, inp_file_indices !, dim_name
         INTEGER, Intent(In)            :: MYRANK, n_lat, n_lon, num_sub
-        ! ToDO: ims snow cover is of 'byte' type (Chcek the right one)	
-        Real, Intent(Out)       :: SNCOV_IMS(n_lat * n_lon) 	
+        ! ToDO: ims snow cover is of 'byte' type (Chcek the right one)  
+        Real, Intent(Out)       :: SNCOV_IMS(n_lat * n_lon)     
     
         INTEGER, ALLOCATABLE    :: SNCOV_IMS_2D_full(:,:)    !SNCOV_IMS_1D(:), 
         Integer                 :: data_grid_ims_ind(num_sub, n_lon, n_lat) 
@@ -1132,7 +1129,7 @@ MODULE M_DA
         ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=DIM_LEN_lon)
         CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension Lon' )
     
-        ALLOCATE(SNCOV_IMS_2D_full(DIM_LEN_lon, DIM_LEN_lat))	
+        ALLOCATE(SNCOV_IMS_2D_full(DIM_LEN_lon, DIM_LEN_lat))   
         ! print*, "initial IMS array size (lon, lat)= ", DIM_LEN_lon, " ",DIM_LEN_lat
         !ALLOCATE(Ele(DIM_LEN_lat, DIM_LEN_lon))
         ERROR=NF90_INQ_VARID(NCID, 'Band1', ID_VAR)
@@ -1208,12 +1205,12 @@ MODULE M_DA
                                                   
         IMPLICIT NONE
     
-        include 'mpif.h'		  
+        include 'mpif.h'                  
     
         !ToDO: Can you use variable length char array ?
         CHARACTER(LEN=*), Intent(In)   :: inp_file
         INTEGER, Intent(In)            :: MYRANK, n_lat, n_lon
-        ! ToDO: ims snow cover is of 'byte' type (Chcek the right one)	
+        ! ToDO: ims snow cover is of 'byte' type (Chcek the right one)  
         Real, Intent(Out)       :: SNCOV_IMS(n_lat * n_lon) 
         Real                    :: SNCOV_IMS_2D_full( n_lon, n_lat)
         
@@ -1246,25 +1243,25 @@ MODULE M_DA
                     lat_min, lat_max, lon_min, lon_max, &
                     DIM_LEN,       & !_lat, DIM_LEN_lon,  &
                     SNCOV_IMS, Lat_IMS, Lon_IMS)
-                    ! Ele		&
+                    ! Ele               &
                     
         IMPLICIT NONE
     
-        include 'mpif.h'		  
+        include 'mpif.h'                  
     
         !ToDO: Can you use variable length char array ?
         CHARACTER(LEN=*), Intent(In)   :: inp_file !, dim_name
         INTEGER, Intent(In)            :: MYRANK
-        REAL, Intent(In)         	   :: lat_min, lat_max, lon_min, lon_max    
+        REAL, Intent(In)                   :: lat_min, lat_max, lon_min, lon_max    
         ! ToDO: ims snow cover is of 'byte' type (Chcek the right one)
-        INTEGER, Intent(Out)    :: DIM_LEN 	
-        INTEGER, ALLOCATABLE, Intent(Out)    :: SNCOV_IMS(:) 	
-        REAL, ALLOCATABLE, Intent(Out)	   :: Lat_IMS(:), Lon_IMS(:)	!, Ele(:,:)
+        INTEGER, Intent(Out)    :: DIM_LEN      
+        INTEGER, ALLOCATABLE, Intent(Out)    :: SNCOV_IMS(:)    
+        REAL, ALLOCATABLE, Intent(Out)     :: Lat_IMS(:), Lon_IMS(:)    !, Ele(:,:)
     
         INTEGER, ALLOCATABLE    :: SNCOV_IMS_2D(:,:), SNCOV_IMS_2D_full(:,:)
-        REAL, ALLOCATABLE	   :: Lat_IMS_1D(:), Lon_IMS_1D(:)	
-        REAL, ALLOCATABLE	   :: Lat_IMS_2D(:,:), Lon_IMS_2D(:,:)
-        REAL, ALLOCATABLE	   :: Lat_minmax_Diff(:), Lon_minmax_Diff(:)	
+        REAL, ALLOCATABLE          :: Lat_IMS_1D(:), Lon_IMS_1D(:)      
+        REAL, ALLOCATABLE          :: Lat_IMS_2D(:,:), Lon_IMS_2D(:,:)
+        REAL, ALLOCATABLE          :: Lat_minmax_Diff(:), Lon_minmax_Diff(:)    
         
         INTEGER                :: ERROR, NCID, ID_DIM, ID_VAR, DIM_LEN_lat, DIM_LEN_lon
         INTEGER                :: indx, jndx, minlat_indx, maxlat_indx, minlon_indx, maxlon_indx
@@ -1285,7 +1282,7 @@ MODULE M_DA
         ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=DIM_LEN_lon)
         CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension Lon' )
     
-        ALLOCATE(SNCOV_IMS_2D_full(DIM_LEN_lon, DIM_LEN_lat))	
+        ALLOCATE(SNCOV_IMS_2D_full(DIM_LEN_lon, DIM_LEN_lat))   
         ALLOCATE(Lat_IMS_1D(DIM_LEN_lat))
         ALLOCATE(Lon_IMS_1D(DIM_LEN_lon))
     
@@ -1331,7 +1328,7 @@ MODULE M_DA
         ALLOCATE(Lon_IMS(DIM_LEN))
         ALLOCATE(Lat_IMS_2D(DIM_LEN_lon, DIM_LEN_lat))
         ALLOCATE(Lon_IMS_2D(DIM_LEN_lon, DIM_LEN_lat))
-        ALLOCATE(SNCOV_IMS_2D(DIM_LEN_lon, DIM_LEN_lat))	
+        ALLOCATE(SNCOV_IMS_2D(DIM_LEN_lon, DIM_LEN_lat))        
         
         ! print*," Dims of SNCOV_IMS_2D_full ", size(SNCOV_IMS_2D_full,1), size(SNCOV_IMS_2D_full,2)
         iincr = 1; jincr = 1;
@@ -1367,7 +1364,7 @@ MODULE M_DA
     
         DEALLOCATE(SNCOV_IMS_2D, SNCOV_IMS_2D_full)
         DEALLOCATE(Lat_IMS_1D, Lon_IMS_1D, Lat_IMS_2D, Lon_IMS_2D)
-        DEALLOCATE(Lat_minmax_Diff, Lon_minmax_Diff)	
+        DEALLOCATE(Lat_minmax_Diff, Lon_minmax_Diff)    
                   
         RETURN
         
@@ -1377,54 +1374,54 @@ MODULE M_DA
      ! Warning: This assumes all distance coordinates are valid; 
      ! do quality control of coordinates beforehand
      SUBROUTINE Observation_Operator(RLA, RLO, OROG, Lat_Obs, Lon_Obs,   &
-                            LENSFC, num_Obs, max_distance, 		&
-                            SNWD_back,  				&
-                            SNWD_atObs, Ele_atObs, index_back_atObs) !,      &
+                            LENSFC, num_Obs, max_distance,              &
+                            SND_back,                                  &
+                            SND_atObs, Ele_atObs, index_back_atObs) !,      &
                             !intp_mode) 
                             !  SWE_atObs  SWE_back
     
         IMPLICIT NONE
         !
         !USE intrinsic::ieee_arithmetic
-        Real, Intent(In) 	:: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
-        Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
+        Real, Intent(In)        :: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
         INTEGER :: LENSFC, num_Obs
-        Real	:: max_distance   ! radius_of_influence
-        Real, Intent(In) 	:: SNWD_back(LENSFC)
+        Real    :: max_distance   ! radius_of_influence
+        Real, Intent(In)        :: SND_back(LENSFC)
     
-        Real, Intent(Out) 	:: SNWD_atObs(num_Obs), Ele_atObs(num_Obs)
-        Integer, Intent(Out) 	:: index_back_atObs(num_Obs)   ! the location of the corresponding obs
+        Real, Intent(Out)       :: SND_atObs(num_Obs), Ele_atObs(num_Obs)
+        Integer, Intent(Out)    :: index_back_atObs(num_Obs)   ! the location of the corresponding obs
         
-        Real 	::  Lon_Obs_2(num_Obs)		!RLO_2(LENSFC), 	
-        Real 	:: RLA_rad(LENSFC), RLO_rad(LENSFC)
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
+        Real    ::  Lon_Obs_2(num_Obs)          !RLO_2(LENSFC),         
+        Real    :: RLA_rad(LENSFC), RLO_rad(LENSFC)
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
         INTEGER :: indx, jndx, zndx, min_indx
         Real    :: distArr(LENSFC), haversinArr(LENSFC)
-        Real 	:: d_latArr(LENSFC), d_lonArr(LENSFC)
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: d_latArr(LENSFC), d_lonArr(LENSFC)
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
+        Real, Parameter         :: earth_rad = 6371.
         ! PRINT*, "PI: ", PI_16
         ! PRINT*, "PI / 180: ", pi_div_180
     
         !Fill background values to nan (to differentiate those htat don't have value)
-        SNWD_atObs = IEEE_VALUE(SNWD_atObs, IEEE_QUIET_NAN)	
-        Ele_atObs = IEEE_VALUE(Ele_atObs, IEEE_QUIET_NAN)	
+        SND_atObs = IEEE_VALUE(SND_atObs, IEEE_QUIET_NAN)     
+        Ele_atObs = IEEE_VALUE(Ele_atObs, IEEE_QUIET_NAN)       
         index_back_atObs = -1   ! when corresponding value doesn't exit
         
-        !if intp_mode == 'near'		! [bilinear, customInterpol])
+        !if intp_mode == 'near'         ! [bilinear, customInterpol])
     
         ! RLO from 0 to 360 (no -ve lon)
         Lon_Obs_2 = Lon_Obs
         Where(Lon_Obs_2 < 0) Lon_Obs_2 = 360. + Lon_Obs_2
         ! Do zndx = 1, num_Obs 
-        ! 	if (Lon_Obs_2(zndx) < 0) Lon_Obs_2(zndx) = 360. + Lon_Obs_2(zndx)
+        !       if (Lon_Obs_2(zndx) < 0) Lon_Obs_2(zndx) = 360. + Lon_Obs_2(zndx)
         ! end do
     
         ! at each obs point compute its distance from RLA/RLO pairs 
         ! then find the position of the minimum
     
-        ! shortest distance over sphere using great circle distance 	
+        ! shortest distance over sphere using great circle distance     
         RLA_rad =  pi_div_180 * RLA
         RLO_rad =  pi_div_180 * RLO
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
@@ -1440,12 +1437,12 @@ MODULE M_DA
             haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad(indx)) * cos(RLA_rad) * sin(d_lonArr)**2
             WHERE(haversinArr > 1) haversinArr = 1.   ! ensure numerical errors don't make h>1
             
-            distArr = 2 * earth_rad * asin(sqrt(haversinArr))		
+            distArr = 2 * earth_rad * asin(sqrt(haversinArr))           
             !distArr = (Lat_Obs(indx) - RLA)**2 + (Lon_Obs_2(indx) - RLO)**2 
             min_indx = MINLOC(distArr, dim = 1)  !, MASK=ieee_is_nan(distArr))
     
             if(distArr(min_indx) < max_distance) then
-                SNWD_atObs(indx) = SNWD_back(min_indx) 
+                SND_atObs(indx) = SND_back(min_indx) 
                 Ele_atObs(indx) = OROG(min_indx)
                 index_back_atObs(indx) = min_indx
             ! else
@@ -1459,36 +1456,39 @@ MODULE M_DA
     
      SUBROUTINE Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
                             RLA, RLO, OROG, Lat_Obs, Lon_Obs,               &
-                            LENSFC, num_Obs, num_Eval, max_distance, SNOFCS_back, SNWD_GHCND,  &
-                            SNOFCS_atObs, Ele_atObs, index_back_atObs, index_back_atEval, Obs_atEvalPts,      &
+                            LENSFC, num_Obs, num_Eval, max_distance, SNOFCS_back, stn_obs,  &
+                            SNOFCS_atObs, OROGFCS_atObs, index_back_atObs, index_back_atEval, Obs_atEvalPts,      &
                             SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
+! Draper, edited to make generic
+
+! CSD -  split out the eval into a separate call. (later)
                             
         IMPLICIT NONE
         !
         !USE intrinsic::ieee_arithmetic
         include "mpif.h"
     
-        Real, Intent(In) 	:: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
-        Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
+        Real, Intent(In)        :: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
         INTEGER             :: Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, LENSFC, num_Obs, num_Eval
-        Real	            :: max_distance   ! radius_of_influence
-        Real, Intent(In) 	:: SNOFCS_back(LENSFC)
-        Real, Intent(InOut) 	:: SNWD_GHCND(num_Obs) 
-        Real, Intent(Out) 	    :: SNOFCS_atObs(num_Obs), Ele_atObs(num_Obs), Obs_atEvalPts(num_Eval)
-        Integer, Intent(Out) 	:: index_back_atEval(num_Eval)   ! the location of evaluation points
-        Integer, Intent(Out)	:: index_back_atObs(num_Obs)   ! the location of background corresponding obs
-        Real, Intent(Out) 	    :: SNOFCS_atEvalPts(num_Eval), Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval)
+        Real                :: max_distance   ! radius_of_influence
+        Real, Intent(In)        :: SNOFCS_back(LENSFC)
+        Real, Intent(InOut)     :: stn_obs(num_Obs) 
+        Real, Intent(Out)       :: SNOFCS_atObs(num_Obs), OROGFCS_atObs(num_Obs), Obs_atEvalPts(num_Eval)
+        Integer, Intent(Out)    :: index_back_atEval(num_Eval)   ! the location of evaluation points
+        Integer, Intent(Out)    :: index_back_atObs(num_Obs)   ! the location of background corresponding obs
+        Real, Intent(Out)           :: SNOFCS_atEvalPts(num_Eval), Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval)
         
-        !Integer	:: index_back_atObs(num_Obs)   ! the location of background corresponding obs
-        Real 	:: Lon_Obs_2(num_Obs)		!RLO_2(LENSFC), 	
-        Real 	:: RLA_rad(LENSFC), RLO_rad(LENSFC)
-        Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
+        !Integer        :: index_back_atObs(num_Obs)   ! the location of background corresponding obs
+        Real    :: Lon_Obs_2(num_Obs)           !RLO_2(LENSFC),         
+        Real    :: RLA_rad(LENSFC), RLO_rad(LENSFC)
+        Real    :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
         INTEGER :: indx, jndx, jzndx, zndx, min_indx
         Real    :: distArr(LENSFC), haversinArr(LENSFC)
-        Real 	:: d_latArr(LENSFC), d_lonArr(LENSFC)
-        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+        Real    :: d_latArr(LENSFC), d_lonArr(LENSFC)
+        Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
-        Real, Parameter		:: earth_rad = 6371.
+        Real, Parameter         :: earth_rad = 6371.
         
         ! for mpi par
         INTEGER            :: N_sA, N_sA_Ext, mp_start, mp_end 
@@ -1505,12 +1505,12 @@ MODULE M_DA
         else
             mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
         endif
-        mp_end = (p_tRank + 1) * N_sA + N_sA_Ext 		! end index of subarray for proc
+        mp_end = (p_tRank + 1) * N_sA + N_sA_Ext                ! end index of subarray for proc
     
         !Fill background values to nan (to differentiate those htat don't have value)
-        SNOFCS_atObs = IEEE_VALUE(SNOFCS_atObs, IEEE_QUIET_NAN)	
-        Ele_atObs = IEEE_VALUE(Ele_atObs, IEEE_QUIET_NAN)	
-        index_back_atObs = -1   ! when corresponding value doesn't exit	
+        SNOFCS_atObs = IEEE_VALUE(SNOFCS_atObs, IEEE_QUIET_NAN) 
+        OROGFCS_atObs = IEEE_VALUE(OROGFCS_atObs, IEEE_QUIET_NAN)       
+        index_back_atObs = -1   ! when corresponding value doesn't exit 
         rand_evalPoint = -1
         index_back_atEval = -1
     
@@ -1519,16 +1519,16 @@ MODULE M_DA
         Where(Lon_Obs_2 < 0) Lon_Obs_2 = 360. + Lon_Obs_2
         ! Do zndx = 1, num_Obs 
         !     !Lon_Obs[Lon_Obs<0]= 360.0 + Lon_Obs[Lon_Obs<0]
-        ! 	if (Lon_Obs(zndx) < 0) Lon_Obs_2(zndx) = 360. + Lon_Obs(zndx)
+        !       if (Lon_Obs(zndx) < 0) Lon_Obs_2(zndx) = 360. + Lon_Obs(zndx)
         ! end do
         ! at each obs point compute its distance from RLA/RLO pairs 
         ! then find the position of the minimum
     
-        ! shortest distance over sphere using great circle distance 	
+        ! shortest distance over sphere using great circle distance     
         RLA_rad =  pi_div_180 * RLA
         RLO_rad =  pi_div_180 * RLO
         Lat_Obs_rad =  pi_div_180 * Lat_Obs
-        Lon_Obs_rad =  pi_div_180 * Lon_Obs_2   	
+        Lon_Obs_rad =  pi_div_180 * Lon_Obs_2           
         ! https://en.wikipedia.org/wiki/Haversine_formula
         ! https://www.geeksforgeeks.org/program-distance-two-points-earth/
         ! Distance, d = R * arccos[(sin(lat1) * sin(lat2)) + cos(lat1) * cos(lat2) * cos(long2 – long1)]
@@ -1539,13 +1539,13 @@ MODULE M_DA
             haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad(indx)) * cos(RLA_rad) * sin(d_lonArr)**2
             WHERE(haversinArr > 1) haversinArr = 1.   ! ensure numerical errors don't make h>1
             
-            distArr = 2 * earth_rad * asin(sqrt(haversinArr))		
+            distArr = 2 * earth_rad * asin(sqrt(haversinArr))           
             !distArr = (Lat_Obs(indx) - RLA)**2 + (Lon_Obs_2(indx) - RLO)**2 
             min_indx = MINLOC(distArr, dim = 1)  !, MASK=ieee_is_nan(distArr))
     
             if(distArr(min_indx) < max_distance) then
                 SNOFCS_atObs(indx) = SNOFCS_back(min_indx) 
-                Ele_atObs(indx) = OROG(min_indx)
+                OROGFCS_atObs(indx) = OROG(min_indx)
                 index_back_atObs(indx) = min_indx
             ! else 
                 ! Print*, " Warning! distance greater than ",max_distance," km ", distArr(min_indx)
@@ -1582,7 +1582,7 @@ MODULE M_DA
         if (MYRANK > (MAX_TASKS - 1) ) then
             call MPI_SEND(SNOFCS_atObs(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
                           MYRANK, MPI_COMM_WORLD, IERR) 
-            call MPI_SEND(Ele_atObs(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
+            call MPI_SEND(OROGFCS_atObs(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
                           MYRANK*100, MPI_COMM_WORLD, IERR)
             call MPI_SEND(index_back_atObs(mp_start:mp_end), N_sA, mpiInt_size, p_tN,   &
                           MYRANK*1000, MPI_COMM_WORLD, IERR)
@@ -1592,7 +1592,7 @@ MODULE M_DA
                 send_proc = MYRANK +  pindex * MAX_TASKS
                 call MPI_RECV(SNOFCS_atObs(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,  &
                           send_proc, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-                call MPI_RECV(Ele_atObs(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,   &
+                call MPI_RECV(OROGFCS_atObs(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,   &
                           send_proc*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
                 call MPI_RECV(index_back_atObs(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiInt_size, send_proc, &
                           send_proc*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
@@ -1600,15 +1600,15 @@ MODULE M_DA
         endif
     !ToDO: better way to do this?
         ! now share the whole array
-        if (MYRANK < MAX_TASKS ) then   !if (MYRANK == p_tN ) then 	
+        if (MYRANK < MAX_TASKS ) then   !if (MYRANK == p_tN ) then      
             ! Print*, "Started selecting obs points"
             ! Select obs points to exclude from DA 
             if(num_Eval > 0) then
                 Call random_number(rand_nextVal)
                 rand_evalPoint(1) = floor(rand_nextVal * num_Obs) + 1
                 index_back_atEval(1) = index_back_atObs(rand_evalPoint(1))
-                if(.NOT. IEEE_IS_NAN(SNWD_GHCND(rand_evalPoint(1))/   & 
-                                     SNWD_GHCND(rand_evalPoint(1)))) then
+                if(.NOT. IEEE_IS_NAN(stn_obs(rand_evalPoint(1))/   & 
+                                     stn_obs(rand_evalPoint(1)))) then
                     index_back_atEval(1) = index_back_atObs(rand_evalPoint(1))
                 else   ! try one more time
                     Call random_number(rand_nextVal)
@@ -1623,7 +1623,7 @@ MODULE M_DA
                 ! Print*, rand_nextVal
                 rand_evalPoint(jndx) = floor(rand_nextVal * num_Obs) + 1
                 if((rand_evalPoint(jndx) /= rand_evalPoint(jndx-1)) .AND.      &
-                   (.NOT. IEEE_IS_NAN(SNWD_GHCND(rand_evalPoint(jndx))/SNWD_GHCND(rand_evalPoint(jndx)))) )  then
+                   (.NOT. IEEE_IS_NAN(stn_obs(rand_evalPoint(jndx))/stn_obs(rand_evalPoint(jndx)))) )  then
                     index_back_atEval(jndx) = index_back_atObs(rand_evalPoint(jndx))
                     jndx = jndx + 1
                 else
@@ -1632,18 +1632,18 @@ MODULE M_DA
                 jzndx = jzndx + 1
                 If (jzndx >= 2*num_Eval) exit 
             Enddo 
-            ! Print*, "Finished selecting obs points"	
+            ! Print*, "Finished selecting obs points"   
             Do pindex =  1, (Np_til - 1)   ! receiving proc index within tile group
                 rec_proc = MYRANK +  pindex * MAX_TASKS
                 call MPI_SEND(SNOFCS_atObs, num_Obs, mpiReal_size, rec_proc, MYRANK, MPI_COMM_WORLD, IERR) 
-                call MPI_SEND(Ele_atObs, num_Obs, mpiReal_size, rec_proc, MYRANK*100, MPI_COMM_WORLD, IERR)
+                call MPI_SEND(OROGFCS_atObs, num_Obs, mpiReal_size, rec_proc, MYRANK*100, MPI_COMM_WORLD, IERR)
                 call MPI_SEND(index_back_atObs, num_Obs, mpiInt_size, rec_proc, MYRANK*1000, MPI_COMM_WORLD, IERR)
                 call MPI_SEND(index_back_atEval, num_Eval, mpiInt_size, rec_proc, MYRANK*10000, MPI_COMM_WORLD, IERR)
                 call MPI_SEND(rand_evalPoint, num_Eval, mpiInt_size, rec_proc, MYRANK*100000, MPI_COMM_WORLD, IERR)
             enddo
         else 
             call MPI_RECV(SNOFCS_atObs, num_Obs, mpiReal_size, p_tN, p_tN, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-            call MPI_RECV(Ele_atObs, num_Obs, mpiReal_size, p_tN, p_tN*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
+            call MPI_RECV(OROGFCS_atObs, num_Obs, mpiReal_size, p_tN, p_tN*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
             call MPI_RECV(index_back_atObs, num_Obs, mpiInt_size, p_tN, p_tN*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
             call MPI_RECV(index_back_atEval, num_Eval, mpiInt_size, p_tN, p_tN*10000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
             call MPI_RECV(rand_evalPoint, num_Eval, mpiInt_size, p_tN, p_tN*100000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
@@ -1654,13 +1654,13 @@ MODULE M_DA
         Lon_atEvalPts = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN)
         Do  jndx = 1, num_Eval
             if (index_back_atEval(jndx) > 0) then
-                Obs_atEvalPts(jndx) = SNWD_GHCND(rand_evalPoint(jndx))
+                Obs_atEvalPts(jndx) = stn_obs(rand_evalPoint(jndx))
                 SNOFCS_atEvalPts(jndx) = SNOFCS_atObs(rand_evalPoint(jndx))
                 Lat_atEvalPts(jndx) = Lat_Obs(rand_evalPoint(jndx)) 
                 Lon_atEvalPts(jndx) = Lon_Obs(rand_evalPoint(jndx))
-                SNWD_GHCND(rand_evalPoint(jndx)) = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN) ! exclude point from DA	
-            endif	
-        Enddo 	
+                stn_obs(rand_evalPoint(jndx)) = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN) ! exclude point from DA     
+            endif       
+        Enddo   
         
         RETURN
         
@@ -1668,7 +1668,7 @@ MODULE M_DA
 
     ! SUBROUTINE Observation_Operator_Snofcs_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
     !                         RLA, RLO, OROG, Lat_Obs, Lon_Obs,               &
-    !                         LENSFC, num_Obs, num_Eval, max_distance, SNOFCS_back, SNWD_GHCND,  &
+    !                         LENSFC, num_Obs, num_Eval, max_distance, SNOFCS_back, SND_GHCND,  &
     !                         Ele_atObs, index_back_atObs, index_back_atEval, Obs_atEvalPts,      &
     !                         SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
                             
@@ -1677,28 +1677,28 @@ MODULE M_DA
     !     !USE intrinsic::ieee_arithmetic
     !     include "mpif.h"
     
-    !     Real, Intent(In) 	:: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
-    !     Real, Intent(In) 	:: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
+    !     Real, Intent(In)      :: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
+    !     Real, Intent(In)      :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
     !     INTEGER             :: Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, LENSFC, num_Obs, num_Eval
-    !     Real	            :: max_distance   ! radius_of_influence
-    !     Real, Intent(In) 	:: SNOFCS_back(LENSFC)
-    !     Real, Intent(InOut) 	:: SNWD_GHCND(num_Obs) 
-    !     Real, Intent(Out) 	    :: Ele_atObs(num_Obs), Obs_atEvalPts(num_Eval)
-    !     Integer, Intent(Out) 	:: index_back_atEval(num_Eval)   ! the location of evaluation points
-    !     Integer, Intent(Out)	:: index_back_atObs(num_Obs)   ! the location of background corresponding obs
-    !     Real, Intent(Out) 	    :: SNOFCS_atEvalPts(num_Eval)
-    !     Real, Intent(Out) 	    :: Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval)
+    !     Real              :: max_distance   ! radius_of_influence
+    !     Real, Intent(In)      :: SNOFCS_back(LENSFC)
+    !     Real, Intent(InOut)   :: SND_GHCND(num_Obs) 
+    !     Real, Intent(Out)         :: Ele_atObs(num_Obs), Obs_atEvalPts(num_Eval)
+    !     Integer, Intent(Out)  :: index_back_atEval(num_Eval)   ! the location of evaluation points
+    !     Integer, Intent(Out)  :: index_back_atObs(num_Obs)   ! the location of background corresponding obs
+    !     Real, Intent(Out)         :: SNOFCS_atEvalPts(num_Eval)
+    !     Real, Intent(Out)         :: Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval)
         
-    !     !Integer	:: index_back_atObs(num_Obs)   ! the location of background corresponding obs
-    !     Real 	:: Lon_Obs_2(num_Obs)		!RLO_2(LENSFC), 	
-    !     Real 	:: RLA_rad(LENSFC), RLO_rad(LENSFC)
-    !     Real 	:: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)	
+    !     !Integer      :: index_back_atObs(num_Obs)   ! the location of background corresponding obs
+    !     Real  :: Lon_Obs_2(num_Obs)           !RLO_2(LENSFC),         
+    !     Real  :: RLA_rad(LENSFC), RLO_rad(LENSFC)
+    !     Real  :: Lat_Obs_rad(num_Obs), Lon_Obs_rad(num_Obs)   
     !     INTEGER :: indx, jndx, jzndx, zndx, min_indx
     !     Real    :: distArr(LENSFC), haversinArr(LENSFC)
-    !     Real 	:: d_latArr(LENSFC), d_lonArr(LENSFC)
-    !     Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)	
+    !     Real  :: d_latArr(LENSFC), d_lonArr(LENSFC)
+    !     Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)      
     !     Real(16), Parameter :: pi_div_180 = PI_16/180.0
-    !     Real, Parameter		:: earth_rad = 6371.
+    !     Real, Parameter               :: earth_rad = 6371.
         
     !     ! for mpi par
     !     INTEGER            :: N_sA, N_sA_Ext, mp_start, mp_end 
@@ -1715,11 +1715,11 @@ MODULE M_DA
     !     else
     !         mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
     !     endif
-    !     mp_end = (p_tRank + 1) * N_sA + N_sA_Ext 		! end index of subarray for proc
+    !     mp_end = (p_tRank + 1) * N_sA + N_sA_Ext              ! end index of subarray for proc
     
     !     !Fill values to nan (to differentiate those htat don't have val
-    !     Ele_atObs = IEEE_VALUE(Ele_atObs, IEEE_QUIET_NAN)	
-    !     index_back_atObs = -1   ! when corresponding value doesn't exit	
+    !     Ele_atObs = IEEE_VALUE(Ele_atObs, IEEE_QUIET_NAN)     
+    !     index_back_atObs = -1   ! when corresponding value doesn't exit       
     !     rand_evalPoint = -1
     !     index_back_atEval = -1
     
@@ -1729,11 +1729,11 @@ MODULE M_DA
     
     !     ! at each obs point compute its distance from RLA/RLO pairs 
     !     ! then find the position of the minimum    
-    !     ! shortest distance over sphere using great circle distance 	
+    !     ! shortest distance over sphere using great circle distance   
     !     RLA_rad =  pi_div_180 * RLA
     !     RLO_rad =  pi_div_180 * RLO
     !     Lat_Obs_rad =  pi_div_180 * Lat_Obs
-    !     Lon_Obs_rad =  pi_div_180 * Lon_Obs_2   	
+    !     Lon_Obs_rad =  pi_div_180 * Lon_Obs_2         
     !     ! https://en.wikipedia.org/wiki/Haversine_formula
     !     ! https://www.geeksforgeeks.org/program-distance-two-points-earth/
     !     ! Distance, d = R * arccos[(sin(lat1) * sin(lat2)) + cos(lat1) * cos(lat2) * cos(long2 – long1)]
@@ -1744,7 +1744,7 @@ MODULE M_DA
     !         haversinArr = sin(d_latArr)**2 + cos(Lat_Obs_rad(indx)) * cos(RLA_rad) * sin(d_lonArr)**2
     !         WHERE(haversinArr > 1) haversinArr = 1.   ! ensure numerical errors don't make h>1
             
-    !         distArr = 2 * earth_rad * asin(sqrt(haversinArr))		
+    !         distArr = 2 * earth_rad * asin(sqrt(haversinArr))         
     !         min_indx = MINLOC(distArr, dim = 1)  !, MASK=ieee_is_nan(distArr))
     
     !         if(distArr(min_indx) < max_distance) then
@@ -1799,7 +1799,7 @@ MODULE M_DA
     !     endif
     ! !ToDO: better way to do this?
     !     ! now share the whole array
-    !     if (MYRANK < MAX_TASKS ) then   !if (MYRANK == p_tN ) then 	
+    !     if (MYRANK < MAX_TASKS ) then   !if (MYRANK == p_tN ) then    
     !         ! Print*, "Started selecting obs points"
     !         ! Select obs points to exclude from DA 
     !         Call random_number(rand_nextVal)
@@ -1812,7 +1812,7 @@ MODULE M_DA
     !             ! Print*, rand_nextVal
     !             rand_evalPoint(jndx) = floor(rand_nextVal * num_Obs) + 1
     !             if((rand_evalPoint(jndx) /= rand_evalPoint(jndx-1)) .AND.      &
-    !                (.NOT. IEEE_IS_NAN(SNWD_GHCND(rand_evalPoint(jndx))/SNWD_GHCND(rand_evalPoint(jndx)))) )  then
+    !                (.NOT. IEEE_IS_NAN(SND_GHCND(rand_evalPoint(jndx))/SND_GHCND(rand_evalPoint(jndx)))) )  then
     !                 index_back_atEval(jndx) = index_back_atObs(rand_evalPoint(jndx))
     !                 jndx = jndx + 1
     !             else
@@ -1821,7 +1821,7 @@ MODULE M_DA
     !             jzndx = jzndx + 1
     !             If (jzndx >= 2*num_Eval) exit 
     !         Enddo 
-    !         ! Print*, "Finished selecting obs points"	
+    !         ! Print*, "Finished selecting obs points" 
     !         Do pindex =  1, (Np_til - 1)   ! receiving proc index within tile group
     !             rec_proc = MYRANK +  pindex * MAX_TASKS
     !             call MPI_SEND(Ele_atObs, num_Obs, mpiReal_size, rec_proc, MYRANK*100, MPI_COMM_WORLD, IERR)
@@ -1841,25 +1841,25 @@ MODULE M_DA
     !     Lon_atEvalPts = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN)
     !     Do  jndx = 1, num_Eval
     !         if (index_back_atEval(jndx) > 0) then
-    !             Obs_atEvalPts(jndx) = SNWD_GHCND(rand_evalPoint(jndx))
+    !             Obs_atEvalPts(jndx) = SND_GHCND(rand_evalPoint(jndx))
     !             SNOFCS_atEvalPts(jndx) = SNOFCS_atObs(rand_evalPoint(jndx))
     !             Lat_atEvalPts(jndx) = Lat_Obs(rand_evalPoint(jndx)) 
     !             Lon_atEvalPts(jndx) = Lon_Obs(rand_evalPoint(jndx))
-    !             SNWD_GHCND(rand_evalPoint(jndx)) = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN) ! exclude point from DA	
-    !         endif	
-    !     Enddo 	
+    !             SND_GHCND(rand_evalPoint(jndx)) = IEEE_VALUE(rand_nextVal, IEEE_QUIET_NAN) ! exclude point from DA   
+    !         endif     
+    !     Enddo         
         
     !     RETURN
         
     !  END SUBROUTINE Observation_Operator_Snofcs_Parallel
     
-    SUBROUTINE Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name,	&
+    SUBROUTINE Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name,       &
                     lat_min, lat_max, lon_min, lon_max, &
-                    NDIM, 			&
-                    SNWD_GHCND,		&
+                    NDIM,                       &
+                    SND_GHCND,         &
                     Lat_GHCND,      &
-                    Lon_GHCND,		&
-                    !Ele_GHCND,		&
+                    Lon_GHCND,          &
+                    !Ele_GHCND,         &
                     MYRANK)
         
         IMPLICIT NONE
@@ -1871,11 +1871,11 @@ MODULE M_DA
         CHARACTER(LEN=*), Intent(In)      :: ghcnd_inp_file, dim_name
         REAL, Intent(In)       :: lat_min, lat_max, lon_min, lon_max 
         INTEGER, Intent(Out)   :: NDIM
-        REAL, ALLOCATABLE, Intent(Out)    :: SNWD_GHCND(:)
-        REAL, ALLOCATABLE, Intent(Out)	  :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: SND_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
     
         INTEGER                :: MYRANK, ERROR, NCID, ID_DIM, ID_VAR, NDIM_In
-        REAL, ALLOCATABLE      :: SNWD_GHCND_In(:), Lat_GHCND_In(:), Lon_GHCND_In(:) !, Ele_GHCND(:)
+        REAL, ALLOCATABLE      :: SND_GHCND_In(:), Lat_GHCND_In(:), Lon_GHCND_In(:) !, Ele_GHCND(:)
         INTEGER, ALLOCATABLE   :: index_Array(:)
         INTEGER                :: jndx, jcounter
     
@@ -1888,14 +1888,13 @@ MODULE M_DA
         ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NDIM_In)
         CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension' )
     
-        ALLOCATE(SNWD_GHCND_In(NDIM_In))
+        ALLOCATE(SND_GHCND_In(NDIM_In))
         ALLOCATE(Lat_GHCND_In(NDIM_In))
         ALLOCATE(Lon_GHCND_In(NDIM_In))
-        !ALLOCATE(Ele_GHCND(NDIM_In))
     
         ERROR=NF90_INQ_VARID(NCID, 'SNWD', ID_VAR)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, SNWD_GHCND_In)
+        ERROR=NF90_GET_VAR(NCID, ID_VAR, SND_GHCND_In)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD RECORD' )
     
         ERROR=NF90_INQ_VARID(NCID, 'lat', ID_VAR)
@@ -1921,8 +1920,8 @@ MODULE M_DA
                 If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max) .and. &
                    (((Lon_GHCND_In(jndx) >= lon_min) .and. (Lon_GHCND_In(jndx) <= 180.)) .or. &
                     ((Lon_GHCND_In(jndx) >= -180.) .and. (Lon_GHCND_In(jndx) <= lon_max))) .and. &
-                    (SNWD_GHCND_In(jndx) >= 0 )) then
-                        !(.NOT. IEEE_IS_NAN(SNWD_GHCND_In(jndx)))) then
+                    (SND_GHCND_In(jndx) >= 0 )) then
+                        !(.NOT. IEEE_IS_NAN(SND_GHCND_In(jndx)))) then
                         NDIM = NDIM + 1
                         index_Array(jcounter) = jndx
                         jcounter = jcounter + 1
@@ -1933,21 +1932,21 @@ MODULE M_DA
                 ! Print*, "jndx = ", jndx
                 If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max) .and. &
                     (Lon_GHCND_In(jndx) > lon_min) .and. (Lon_GHCND_In(jndx) < lon_max) .and. &
-                    (SNWD_GHCND_In(jndx) >= 0 )) then
-                        !(.NOT. IEEE_IS_NAN(SNWD_GHCND_In(jndx)))) then
+                    (SND_GHCND_In(jndx) >= 0 )) then
+                        !(.NOT. IEEE_IS_NAN(SND_GHCND_In(jndx)))) then
                         NDIM = NDIM + 1
                         index_Array(jcounter) = jndx
                         jcounter = jcounter + 1
                 Endif
             End do
         Endif
-        ALLOCATE(SNWD_GHCND(NDIM))
+        ALLOCATE(SND_GHCND(NDIM))
         ALLOCATE(Lat_GHCND(NDIM))
         ALLOCATE(Lon_GHCND(NDIM))
         !ALLOCATE(Ele_GHCND(NDIM))
         If(NDIM > 0) then
             Do jndx = 1, NDIM
-                SNWD_GHCND(jndx) = SNWD_GHCND_In(index_Array(jndx))
+                SND_GHCND(jndx) = SND_GHCND_In(index_Array(jndx))
                 Lat_GHCND(jndx) = Lat_GHCND_In(index_Array(jndx))
                 Lon_GHCND(jndx) = Lon_GHCND_In(index_Array(jndx))
             End do
@@ -1955,17 +1954,17 @@ MODULE M_DA
         DEALLOCATE(index_Array)
         ! jcounter = 1
         ! If(NDIM > 0) then
-        ! 	Do jndx = 1, NDIM_In
-        ! 		If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max)) then
-        ! 			If((Lon_GHCND_In(jndx) > lon_min) .and. (Lon_GHCND_In(jndx) < lon_max)) then
-        ! 				SNWD_GHCND(jcounter) = SNWD_GHCND_In(jndx)
-        ! 				Lat_GHCND(jcounter) = Lat_GHCND_In(jndx)
-        ! 				Lon_GHCND(jcounter) = Lon_GHCND_In(jndx)
-        ! 				jcounter = jcounter + 1
-        ! 			Endif
-        ! 		Endif
-        ! 	End do
-        ! Endif	
+        !       Do jndx = 1, NDIM_In
+        !               If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max)) then
+        !                       If((Lon_GHCND_In(jndx) > lon_min) .and. (Lon_GHCND_In(jndx) < lon_max)) then
+        !                               SND_GHCND(jcounter) = SND_GHCND_In(jndx)
+        !                               Lat_GHCND(jcounter) = Lat_GHCND_In(jndx)
+        !                               Lon_GHCND(jcounter) = Lon_GHCND_In(jndx)
+        !                               jcounter = jcounter + 1
+        !                       Endif
+        !               Endif
+        !       End do
+        ! Endif 
     
         ERROR = NF90_CLOSE(NCID)
                   
@@ -1973,13 +1972,13 @@ MODULE M_DA
         
      End SUBROUTINE Observation_Read_GHCND_Tile_excNaN
 
-     SUBROUTINE Observation_Read_GHCND_Tile(ghcnd_inp_file, dim_name,			&
+     SUBROUTINE Observation_Read_GHCND_Tile(ghcnd_inp_file, dim_name,                   &
                     lat_min, lat_max, lon_min, lon_max, &
-                    NDIM, 			&
-                    SNWD_GHCND,		&
+                    NDIM,                       &
+                    SND_GHCND,         &
                     Lat_GHCND,      &
-                    Lon_GHCND,		&
-                    !Ele_GHCND,		&
+                    Lon_GHCND,          &
+                    !Ele_GHCND,         &
                     MYRANK)
         
         IMPLICIT NONE
@@ -1990,11 +1989,11 @@ MODULE M_DA
         CHARACTER(LEN=*), Intent(In)      :: ghcnd_inp_file, dim_name
         REAL, Intent(In)       :: lat_min, lat_max, lon_min, lon_max 
         INTEGER, Intent(Out)   :: NDIM
-        REAL, ALLOCATABLE, Intent(Out)    :: SNWD_GHCND(:)
-        REAL, ALLOCATABLE, Intent(Out)	  :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: SND_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
     
         INTEGER                :: MYRANK, ERROR, NCID, ID_DIM, ID_VAR, NDIM_In
-        REAL, ALLOCATABLE      :: SNWD_GHCND_In(:), Lat_GHCND_In(:), Lon_GHCND_In(:) !, Ele_GHCND(:)
+        REAL, ALLOCATABLE      :: SND_GHCND_In(:), Lat_GHCND_In(:), Lon_GHCND_In(:) !, Ele_GHCND(:)
         INTEGER, ALLOCATABLE   :: index_Array(:)
         INTEGER                :: jndx, jcounter
     
@@ -2007,14 +2006,14 @@ MODULE M_DA
         ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NDIM_In)
         CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension' )
     
-        ALLOCATE(SNWD_GHCND_In(NDIM_In))
+        ALLOCATE(SND_GHCND_In(NDIM_In))
         ALLOCATE(Lat_GHCND_In(NDIM_In))
         ALLOCATE(Lon_GHCND_In(NDIM_In))
         !ALLOCATE(Ele_GHCND(NDIM_In))
     
         ERROR=NF90_INQ_VARID(NCID, 'SNWD', ID_VAR)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, SNWD_GHCND_In)
+        ERROR=NF90_GET_VAR(NCID, ID_VAR, SND_GHCND_In)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD RECORD' )
     
         ERROR=NF90_INQ_VARID(NCID, 'lat', ID_VAR)
@@ -2043,13 +2042,13 @@ MODULE M_DA
                     jcounter = jcounter + 1
             Endif
         End do
-        ALLOCATE(SNWD_GHCND(NDIM))
+        ALLOCATE(SND_GHCND(NDIM))
         ALLOCATE(Lat_GHCND(NDIM))
         ALLOCATE(Lon_GHCND(NDIM))
         !ALLOCATE(Ele_GHCND(NDIM))
         If(NDIM > 0) then
             Do jndx = 1, NDIM
-                SNWD_GHCND(jndx) = SNWD_GHCND_In(index_Array(jndx))
+                SND_GHCND(jndx) = SND_GHCND_In(index_Array(jndx))
                 Lat_GHCND(jndx) = Lat_GHCND_In(index_Array(jndx))
                 Lon_GHCND(jndx) = Lon_GHCND_In(index_Array(jndx))
             End do
@@ -2057,17 +2056,17 @@ MODULE M_DA
         DEALLOCATE(index_Array)
         ! jcounter = 1
         ! If(NDIM > 0) then
-        ! 	Do jndx = 1, NDIM_In
-        ! 		If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max)) then
-        ! 			If((Lon_GHCND_In(jndx) > lon_min) .and. (Lon_GHCND_In(jndx) < lon_max)) then
-        ! 				SNWD_GHCND(jcounter) = SNWD_GHCND_In(jndx)
-        ! 				Lat_GHCND(jcounter) = Lat_GHCND_In(jndx)
-        ! 				Lon_GHCND(jcounter) = Lon_GHCND_In(jndx)
-        ! 				jcounter = jcounter + 1
-        ! 			Endif
-        ! 		Endif
-        ! 	End do
-        ! Endif	
+        !       Do jndx = 1, NDIM_In
+        !               If((Lat_GHCND_In(jndx) > lat_min) .and. (Lat_GHCND_In(jndx) < lat_max)) then
+        !                       If((Lon_GHCND_In(jndx) > lon_min) .and. (Lon_GHCND_In(jndx) < lon_max)) then
+        !                               SND_GHCND(jcounter) = SND_GHCND_In(jndx)
+        !                               Lat_GHCND(jcounter) = Lat_GHCND_In(jndx)
+        !                               Lon_GHCND(jcounter) = Lon_GHCND_In(jndx)
+        !                               jcounter = jcounter + 1
+        !                       Endif
+        !               Endif
+        !       End do
+        ! Endif 
     
         ERROR = NF90_CLOSE(NCID)
                   
@@ -2075,12 +2074,12 @@ MODULE M_DA
         
      End SUBROUTINE Observation_Read_GHCND_Tile
     
-     SUBROUTINE Observation_Read_GHCND(ghcnd_inp_file, dim_name,			&
-                    NDIM, 			&
-                    SNWD_GHCND,		&
+     SUBROUTINE Observation_Read_GHCND(ghcnd_inp_file, dim_name,                        &
+                    NDIM,                       &
+                    SND_GHCND,         &
                     Lat_GHCND,      &
-                    Lon_GHCND,		&
-                    !Ele_GHCND,		&
+                    Lon_GHCND,          &
+                    !Ele_GHCND,         &
                     MYRANK)
         
         IMPLICIT NONE
@@ -2094,8 +2093,8 @@ MODULE M_DA
         INTEGER                :: ID_DIM, ID_VAR
         INTEGER, Intent(Out)   :: NDIM
     
-        REAL, ALLOCATABLE, Intent(Out)    :: SNWD_GHCND(:)
-        REAL, ALLOCATABLE, Intent(Out)	   :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: SND_GHCND(:)
+        REAL, ALLOCATABLE, Intent(Out)     :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
     
         ERROR=NF90_OPEN(TRIM(ghcnd_inp_file),NF90_NOWRITE,NCID)
         CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(ghcnd_inp_file) )
@@ -2106,14 +2105,14 @@ MODULE M_DA
         ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NDIM)
         CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension' )
     
-        ALLOCATE(SNWD_GHCND(NDIM))
+        ALLOCATE(SND_GHCND(NDIM))
         ALLOCATE(Lat_GHCND(NDIM))
         ALLOCATE(Lon_GHCND(NDIM))
         !ALLOCATE(Ele_GHCND(NDIM))
     
         ERROR=NF90_INQ_VARID(NCID, 'SNWD', ID_VAR)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, SNWD_GHCND)
+        ERROR=NF90_GET_VAR(NCID, ID_VAR, SND_GHCND)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD RECORD' )
     
         ERROR=NF90_INQ_VARID(NCID, 'lat', ID_VAR)
@@ -2139,13 +2138,13 @@ MODULE M_DA
      End SUBROUTINE Observation_Read_GHCND
 
      SUBROUTINE Observation_Read_SNOTEL(snotel_inp_file,  &
-                    dim_name,			&
+                    dim_name,                   &
                     NDIM, &
                     SWE_SNOTEL,      &
-                    SNWD_SNOTEL,		&
+                    SND_SNOTEL,                &
                     Lat_SNOTEL,      &
-                    Lon_SNOTEL,		&
-                    !  Ele_SNOTEL		&
+                    Lon_SNOTEL,         &
+                    !  Ele_SNOTEL               &
                     MYRANK)
         IMPLICIT NONE
     
@@ -2160,9 +2159,9 @@ MODULE M_DA
         INTEGER                :: ID_DIM, ID_VAR 
         INTEGER, Intent(out)   :: NDIM
     
-        REAL, ALLOCATABLE, Intent(Out)    :: SWE_SNOTEL(:), SNWD_SNOTEL(:)
-        REAL, ALLOCATABLE, Intent(Out)	   :: Lat_SNOTEL(:), Lon_SNOTEL(:) !, Ele_SNOTEL(:)
-        REAL, ALLOCATABLE	   :: SWE_Ratio(:) !, Ele_SNOTEL(:)
+        REAL, ALLOCATABLE, Intent(Out)    :: SWE_SNOTEL(:), SND_SNOTEL(:)
+        REAL, ALLOCATABLE, Intent(Out)     :: Lat_SNOTEL(:), Lon_SNOTEL(:) !, Ele_SNOTEL(:)
+        REAL, ALLOCATABLE          :: SWE_Ratio(:) !, Ele_SNOTEL(:)
         Integer                :: num_invalid
     
         ERROR=NF90_OPEN(TRIM(snotel_inp_file),NF90_NOWRITE,NCID)
@@ -2176,10 +2175,10 @@ MODULE M_DA
     
     
         ALLOCATE(SWE_SNOTEL(NDIM))
-        ALLOCATE(SNWD_SNOTEL(NDIM))
+        ALLOCATE(SND_SNOTEL(NDIM))
         ALLOCATE(Lat_SNOTEL(NDIM))
         ALLOCATE(Lon_SNOTEL(NDIM))
-        ALLOCATE(SWE_Ratio(NDIM))	
+        ALLOCATE(SWE_Ratio(NDIM))       
         !ALLOCATE(Ele_SNOTEL(NDIM))
     
         ERROR=NF90_INQ_VARID(NCID, 'SWE', ID_VAR)
@@ -2189,7 +2188,7 @@ MODULE M_DA
     
         ERROR=NF90_INQ_VARID(NCID, 'SNWD', ID_VAR)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, SNWD_SNOTEL)
+        ERROR=NF90_GET_VAR(NCID, ID_VAR, SND_SNOTEL)
         CALL NETCDF_ERR(ERROR, 'ERROR READING SNWD RECORD' )
     
         ERROR=NF90_INQ_VARID(NCID, 'lat', ID_VAR)
@@ -2254,8 +2253,8 @@ MODULE M_DA
              IMPLICIT NONE
             
              CHARACTER(LEN=*), INTENT(IN) :: STRING
-             real, Intent(in)			  :: num_val
-             CHARACTER(LEN=20)			  :: numval_Str
+             real, Intent(in)                     :: num_val
+             CHARACTER(LEN=20)                    :: numval_Str
         
              write(numval_Str, "(F18.3)"),  num_val
                  
