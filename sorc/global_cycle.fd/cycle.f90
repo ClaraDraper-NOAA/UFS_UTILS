@@ -96,11 +96,11 @@
  CHARACTER(LEN=3) :: DONST
  INTEGER :: IDIM, JDIM, LSOIL, LUGB, IY, IM, ID, IH, IALB
  INTEGER :: ISOT, IVEGSRC, LENSFC, ZSEA1_MM, ZSEA2_MM, IERR
- INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_IO_TYPE
+ INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_OI_TYPE
  REAL    :: FH, DELTSFC, ZSEA1, ZSEA2
  LOGICAL :: USE_UFO, DO_NSST, ADJT_NST_ONLY
 
-! SNOW_IO_TYPE controls the OI of snow obs. 
+! SNOW_OI_TYPE controls the OI of snow obs. 
 ! 0  - no OI of snow
 ! 1  - OI applied to snow depth 
 ! 2  - OI appplied to SWE
@@ -118,7 +118,7 @@
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
-                  ZSEA2_MM, MAX_TASKS, SNOW_IO_TYPE, PERCENT_OBS_WITHHELD,    &
+                  ZSEA2_MM, MAX_TASKS, SNOW_OI_TYPE, PERCENT_OBS_WITHHELD,    &
                   horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
                   max_num_obs_at_point, &
                   GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH
@@ -127,7 +127,7 @@
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
- DATA SNOW_IO_TYPE/0/
+ DATA SNOW_OI_TYPE/0/
  DATA PERCENT_OBS_WITHHELD/0.0/
  DATA horz_len_scale/55.0/
  DATA ver_len_scale/800./
@@ -165,13 +165,13 @@
  LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ! do snow OI, if requested
- IF (SNOW_IO_TYPE .gt. 0) then
+ IF (SNOW_OI_TYPE .gt. 0) then
     ALLOCATE(SNOANL(LENSFC))
     CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
     ! snow analysis with OI DA
     ! s_assm_hour =18
     ! if (IH == s_assm_hour) then
-    Call Snow_Analysis_OI(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
+    Call Snow_Analysis_OI(SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
                           LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
                           horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
                           max_num_obs_at_point, &
@@ -201,19 +201,19 @@
  IF (MYRANK==0) PRINT*,"LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH: ", &
               LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH
 
- IF (SNOW_IO_TYPE ==0 ) THEN
+ IF (SNOW_OI_TYPE ==0 ) THEN
         CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
              ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-             SNOW_IO_TYPE)  
+             SNOW_OI_TYPE)  
  ELSE
  
         CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
              ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-             SNOW_IO_TYPE, SNOANL)  
+             SNOW_OI_TYPE, SNOANL)  
  ENDIF
 
  PRINT*
@@ -237,7 +237,7 @@
                    IY,IM,ID,IH,FH,IALB,                  &
                    USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
                    ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-                   SNOW_IO_TYPE, SNOANL)  ! analysis SWE from surface_cycle
+                   SNOW_OI_TYPE, SNOANL)  ! analysis SWE from surface_cycle
 !
  USE READ_WRITE_DATA
 
@@ -245,7 +245,7 @@
 
  INTEGER, INTENT(IN) :: IDIM, JDIM, LENSFC, LSOIL, IALB
  INTEGER, INTENT(IN) :: LUGB, IY, IM, ID, IH
- INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK, SNOW_IO_TYPE
+ INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK, SNOW_OI_TYPE
 
  LOGICAL, INTENT(IN) :: USE_UFO, DO_NSST, ADJT_NST_ONLY
  
@@ -494,7 +494,7 @@
    PRINT*
    PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."          
  
-   IF (SNOW_IO_TYPE == 0) THEN
+   IF (SNOW_OI_TYPE == 0) THEN
         CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
                SLMASK,OROG, OROG_UF, USE_UFO, DO_NSST,   &
@@ -506,7 +506,7 @@
                CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
                SZ_NML, INPUT_NML_FILE,                   &
                IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
-               SNOW_IO_TYPE) 
+               SNOW_OI_TYPE) 
     ELSE
         CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
@@ -519,7 +519,7 @@
                CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
                SZ_NML, INPUT_NML_FILE,                   &
                IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
-               SNOW_IO_TYPE, SNOANL)
+               SNOW_OI_TYPE, SNOANL)
    ENDIF 
 
  ENDIF

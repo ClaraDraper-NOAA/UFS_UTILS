@@ -9106,7 +9106,6 @@ cjfe
         dsnew = 0.05 + 0.0017*(tempc + 15.0)**1.5
       endif
       
-      write(6,*) 'new snow density', dsnew, tempc
 
       return 
       end subroutine new_snow_density
