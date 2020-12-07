@@ -96,48 +96,74 @@
  CHARACTER(LEN=3) :: DONST
  INTEGER :: IDIM, JDIM, LSOIL, LUGB, IY, IM, ID, IH, IALB
  INTEGER :: ISOT, IVEGSRC, LENSFC, ZSEA1_MM, ZSEA2_MM, IERR
- INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_IO_TYPE
+ INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_OI_TYPE
  REAL    :: FH, DELTSFC, ZSEA1, ZSEA2
  LOGICAL :: USE_UFO, DO_NSST, ADJT_NST_ONLY
 
-! SNOW_IO_TYPE controls the OI of snow obs. 
+! SNOW_OI_TYPE controls the OI of snow obs. 
 ! 0  - no OI of snow
 ! 1  - OI applied to snow depth 
-! 2  - OI appplied to SWE
+! 2  - OI appplied to SWE  
 ! Note:SFCSUB coded for different snow obs. types, but OI calling program is not
 
 ! 
  REAL, ALLOCATABLE   :: SNOANL(:) 
  REAL                :: PERCENT_OBS_WITHHELD
- REAL                :: horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele
- Integer             :: max_num_obs_at_point
+ REAL                :: horz_len_scale, ver_len_scale, obs_tolerance 
+ REAL                :: obs_srch_rad, bkgst_srch_rad, ims_max_ele, dT_Asssim
+ Integer             :: max_num_nearStn, max_num_nearIMS, num_subgrd_ims_cels, num_assim_steps
+ LOGICAL             :: assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated
  CHARACTER(LEN=500)  :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
-                        IMS_INDEXES_PATH
+                        IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
+ CHARACTER(len=4)    :: stn_var 
  !Integer	           :: s_assm_hour
 
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
-                  ZSEA2_MM, MAX_TASKS, SNOW_IO_TYPE, PERCENT_OBS_WITHHELD,    &
-                  horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
-                  max_num_obs_at_point, &
-                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH
+                  ZSEA2_MM, MAX_TASKS, SNOW_OI_TYPE, PERCENT_OBS_WITHHELD,    &
+                  horz_len_scale, ver_len_scale, obs_tolerance, & 
+                  obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &
+                  ims_max_ele, num_subgrd_ims_cels, num_assim_steps, dT_Asssim, &
+                  assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
+                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
 !
  DATA IDIM,JDIM,LSOIL/96,96,4/
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
- DATA SNOW_IO_TYPE/0/
+ DATA SNOW_OI_TYPE/0/
  DATA PERCENT_OBS_WITHHELD/0.0/
  DATA horz_len_scale/55.0/
  DATA ver_len_scale/800./
- DATA obs_tolerance/5./
- DATA ims_max_ele/1500./ 
- DATA max_num_obs_at_point/50/ 
- DATA GHCND_SNOWDEPTH_PATH/'        '/
+ DATA obs_tolerance/5./ 
+ DATA obs_srch_rad/250.0/
+ DATA bkgst_srch_rad/27.0/ 
+ DATA max_num_nearStn/50/ 
+ DATA max_num_nearIMS/5/
+ DATA ims_max_ele/1500./
+ DATA num_subgrd_ims_cels/30/
+ DATA num_assim_steps/1/  ! For multiple time steps of assimilation
+ DATA dT_Asssim/24.0/     ! hrs. For multiple time steps of assimilation
+ DATA assim_SnowPack_obs/.true./
+ DATA assim_SnowCov_obs/.true./
+ DATA ims_correlated/.true./
+ DATA stn_var/'SND'/
+ DATA GHCND_SNOWDEPTH_PATH/'        '/ 
  DATA IMS_SNOWCOVER_PATH/'        '/
  DATA IMS_INDEXES_PATH/'        '/
-!
+ DATA SFC_FORECAST_PREFIX/'        '/   ! leave this empty to use the default sfc_ files location
+
+ !     If (IDIM == 96) then   
+ !         num_subgrd_ims_cels = 627    ! (max) number of IMS subcells within a tile grid cell           
+ !         bkgst_srch_rad = 240.     !Km distance from gridcell to search for corresponding background state
+ !     elseif (IDIM == 128) then
+ !         num_subgrd_ims_cels = 627               
+ !        bkgst_srch_rad = 240.          ! CSD  - this should be in a namelist. 
+ !     elseif (IDIM == 768) then
+ !         num_subgrd_ims_cels = 30
+ !         bkgst_srch_rad = 27.                              !Km 
+ 
  CALL MPI_INIT(IERR)
  CALL MPI_COMM_SIZE(MPI_COMM_WORLD, NPROCS, IERR)
  CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, IERR)
@@ -165,17 +191,19 @@
  LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ! do snow OI, if requested
- IF (SNOW_IO_TYPE .gt. 0) then
+ IF (SNOW_OI_TYPE .gt. 0) then
     ALLOCATE(SNOANL(LENSFC))
     CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-    ! snow analysis with OI DA
     ! s_assm_hour =18
     ! if (IH == s_assm_hour) then
-    Call Snow_Analysis_OI(SNOW_IO_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
+    Call Snow_Analysis_OI(SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
+                          num_assim_steps, dT_Asssim,  & 
                           LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
-                          horz_len_scale, ver_len_scale, obs_tolerance, ims_max_ele, &
-                          max_num_obs_at_point, &
-                          GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, &
+                          horz_len_scale, ver_len_scale, obs_tolerance, &
+                          obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &
+                          ims_max_ele, num_subgrd_ims_cels, &
+                          assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
+                          GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX, &
                           SNOANL)
     ! Call map_outputs_toObs(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
     !                        LENSFC, CURRENT_ANALYSIS_PATH)
@@ -201,19 +229,19 @@
  IF (MYRANK==0) PRINT*,"LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH: ", &
               LUGB,IDIM,JDIM,LSOIL,DELTSFC,IY,IM,ID,IH,FH
 
- IF (SNOW_IO_TYPE ==0 ) THEN
+ IF (SNOW_OI_TYPE ==0 ) THEN
         CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
              ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-             SNOW_IO_TYPE)  
+             SNOW_OI_TYPE)  
  ELSE
  
         CALL SFCDRV(LUGB,IDIM,JDIM,LENSFC,LSOIL,DELTSFC,  &
              IY,IM,ID,IH,FH,IALB,                  &
              USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
              ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-             SNOW_IO_TYPE, SNOANL)  
+             SNOW_OI_TYPE, SNOANL)  
  ENDIF
 
  PRINT*
@@ -237,7 +265,7 @@
                    IY,IM,ID,IH,FH,IALB,                  &
                    USE_UFO,DO_NSST,ADJT_NST_ONLY,        &
                    ZSEA1,ZSEA2,ISOT,IVEGSRC,MYRANK,      &
-                   SNOW_IO_TYPE, SNOANL)  ! analysis SWE from surface_cycle
+                   SNOW_OI_TYPE, SNOANL)  ! analysis SWE from surface_cycle
 !
  USE READ_WRITE_DATA
 
@@ -245,7 +273,7 @@
 
  INTEGER, INTENT(IN) :: IDIM, JDIM, LENSFC, LSOIL, IALB
  INTEGER, INTENT(IN) :: LUGB, IY, IM, ID, IH
- INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK, SNOW_IO_TYPE
+ INTEGER, INTENT(IN) :: ISOT, IVEGSRC, MYRANK, SNOW_OI_TYPE
 
  LOGICAL, INTENT(IN) :: USE_UFO, DO_NSST, ADJT_NST_ONLY
  
@@ -494,7 +522,7 @@
    PRINT*
    PRINT*,"CALL SFCCYCLE TO UPDATE SURFACE FIELDS."          
  
-   IF (SNOW_IO_TYPE == 0) THEN
+   IF (SNOW_OI_TYPE == 0) THEN
         CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
                SLMASK,OROG, OROG_UF, USE_UFO, DO_NSST,   &
@@ -506,7 +534,7 @@
                CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
                SZ_NML, INPUT_NML_FILE,                   &
                IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
-               SNOW_IO_TYPE) 
+               SNOW_OI_TYPE) 
     ELSE
         CALL SFCCYCLE(LUGB,LENSFC,LSOIL,SIG1T,DELTSFC,   &
                IY,IM,ID,IH,FH,RLA,RLO,                   &
@@ -519,7 +547,7 @@
                CVFCS,CVBFCS,CVTFCS,MYRANK,NLUNIT,        &
                SZ_NML, INPUT_NML_FILE,                   &
                IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX, &
-               SNOW_IO_TYPE, SNOANL)
+               SNOW_OI_TYPE, SNOANL)
    ENDIF 
 
  ENDIF
