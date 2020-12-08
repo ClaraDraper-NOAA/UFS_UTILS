@@ -372,22 +372,23 @@ CONTAINS
         endif ! num_stn > 0
 
 !=============================================================================================
-! 5.  Obs-based obs QC goes here
+! 5.  obs QC goes here
 !=============================================================================================
 
 !CSDCSD - todo. Add QC here.
 
 ! QC steps:
 ! if station elevation >1500, discard stn_obs
-! is IMS observations > threshold, discard IMS obs * 
-! min/max limits on station obs
-! temperature check on all obs 
+! is model eleveation > threshold, discard IMS obs * 
 
-! if abs (model - obs ) elevation > ??,  discard obs 
+! min/max limits on station obs
+! temperature check on all obs  (later if no temperature data with GHCN?)
+
+! if abs (model - obs ) elevation > ??,  discard obs  (threshold, try 200 - 400 m-ish)
 
 ! QC obs for land cover (below QC's update cell, but not obs) 
 ! gross error check * 
-! screen stn obs for IMS snow cover 
+! screen stn obs for IMS snow cover ???
 ! screen snow cover-derived snow depth (IMS) if model has snow  * 
 
 !=============================================================================================
@@ -402,6 +403,7 @@ CONTAINS
                 assim_sncov_thisGridCell = .FALSE.
                 if (print_deb) print*, "proc ", myrank, " grid: ", jndx
                 if(num_stn>0) then 
+                ! CSD - speed up by skipping over all grid cells where model and IMS agree on no snow? 
                 ! currently: find station obs in radius, do gross error check, and limit to 50 obs
                 ! QC: gross error check is done in this call.
                         call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
