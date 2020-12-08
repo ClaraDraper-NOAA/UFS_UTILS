@@ -118,7 +118,7 @@ CONTAINS
 !=============================================================================================
         assim_snpack_stn = assim_SnowPack_obs ! if assimilating GHCND, doesn't have SWE obs. need to convert to SWE
         assim_sncov =  assim_SnowCov_obs  
-        ! stn_var = 'SND'  stn_var = 'SWE'
+
         If (SNOW_OI_TYPE == 2) then 
                 assim_SWE = .True.      ! note: if this is set true, need to establish stdev_obsv and stdev_back
                                         !       and need to code readers for appropriate data sets
@@ -157,7 +157,7 @@ CONTAINS
         If(myrank == 0 )PRINT*,"sub array length ", N_sA, " extra sub array: ", N_sA_Ext
 ! if (p_tN /= 4 ) goto 999
 
-! must have at least on kind of obs: depth or area. If no obs files: go to end 
+! must have at least one kind of obs: depth or area. If no obs files: go to end 
         if (GHCND_SNOWDEPTH_PATH(1:8).eq.'        ') assim_snpack_stn = .false.
         if ((IMS_SNOWCOVER_PATH(1:8).eq.'        ') .OR. (IMS_INDEXES_PATH(1:8).eq.'        ')) then
                 assim_sncov = .false.
@@ -218,7 +218,6 @@ CONTAINS
                                      
         Call READ_Forecast_Data_atPath(forc_inp_path, veg_type_landice, LENSFC, SWEFCS, SNDFCS, &
                                        VETFCS, LANDMASK)
-        ! Call READ_Forecast_Data(p_tN, LENSFC, veg_type_landice, SWEFCS, SNDFCS, VETFCS, LANDMASK)
 
         if (assim_SWE) then 
            SNOFCS=SWEFCS  
@@ -269,7 +268,7 @@ CONTAINS
 
        endif
 
-! beyond this point, there should be no specific mention of the station data source
+! CSD beyond this point, there should be no specific mention of the station data source
 
 ! 3b. Read remotely sensed snow cover, and convert to  snow depth or SWE. 
 
@@ -289,9 +288,8 @@ CONTAINS
             if (myrank==0) PRINT*,'Finished reading SNCOV, converting to snow depth' 
 
             call CalcSWEFromSnowCover(SNCOV_IMS, VETFCS, LENSFC, SNO_IMS_at_Grid, SNUP_Array)
-! CSDCSD - here  filter SNO_IMS_at_Grid, to remove obs where both model and IMS show snow
-            ! snd = swe/snd
-            if (.not. assim_SWE)  SNO_IMS_at_Grid = SNO_IMS_at_Grid/SNODENS_DIST !snodens ! convert SWE to SND
+
+            if (.not. assim_SWE)  SNO_IMS_at_Grid = SNO_IMS_at_Grid/SNODENS_DIST ! convert SWE to SND
             
             if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then
                     PRINT*, "SNCOV obs at each grid cell from rank: ", MYRANK
@@ -305,7 +303,7 @@ CONTAINS
 ! 4. Get H(x): Read forecast snow fields from restart files, then interpolate to obs location.
 !=============================================================================================
 
-! 43a. read the forecast file on model grid : this was done earlier, as need veg type and 
+! 4a. read the forecast file on model grid : this was done earlier, as need veg type and 
 !      snow density for IMS snow depth conversion
 
 ! 4b. get H(x) for station obs
@@ -316,7 +314,6 @@ CONTAINS
             ALLOCATE(index_back_atObs(num_stn)) 
             ALLOCATE(OmB_innov_at_stn(num_stn)) 
              ! using PERCENT_OBS_WITHHELD % of stn locations for evaluation
-! CSD - todo, add code to skip all eval sets if num_Eval is 0.
             num_Eval = floor(0.01 * PERCENT_OBS_WITHHELD * num_stn)  
             if (num_Eval > 0) then 
                 ALLOCATE(index_back_atEval(num_Eval)) 
@@ -332,8 +329,7 @@ CONTAINS
             endif 
 
     ! CSD todo: separate out eval call and obs operator call. model info (SNOOBS_stn shouldn't be in the obs operator)
-
-! CSDCSD - could either add IMS in here, or take advantage of the obs being located on model grid cells to simplify 
+    !           for JEDI, probably also want to add snow depth derived from snow cover here.
             Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
                                 RLA, RLO, OROG, Lat_stn, Lon_stn,   &
                                 LENSFC, num_stn, num_Eval, bkgst_srch_rad, SNOFCS, SNOOBS_stn,  &
@@ -351,7 +347,9 @@ CONTAINS
                     PRINT*, "Lon at Eval Points"
                     PRINT*, Lon_atEvalPts
             endif
+
             OmB_innov_at_stn = SNOOBS_stn - SNOFCS_at_stn
+
             if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then
                     PRINT*, "station Lat range from rank: ", MYRANK, MINVAL(Lat_stn), " ", MAXVAL(Lat_stn)
                     PRINT*, "station Lon range from rank: ", MYRANK, MINVAL(Lon_stn), " ", MAXVAL(Lon_stn)
@@ -377,15 +375,20 @@ CONTAINS
 ! 5.  Obs-based obs QC goes here
 !=============================================================================================
 
-!CSDCSD - todo. Add  QC here.
+!CSDCSD - todo. Add QC here.
 
-! if model? elevation >1500, discard stn_obs
-! if abs (model - obs ) elevation > ? m discard obs 
-! QC obs (or model background might be easier?) with the LANDMASK
-! min/max limits on obs? 
+! QC steps:
+! if station elevation >1500, discard stn_obs
+! is IMS observations > threshold, discard IMS obs * 
+! min/max limits on station obs
+! temperature check on all obs 
 
-! CSDCSD - probably here, construct an obs vector that contains both IMS and station obs
-! this then replaces the obs_stn input below (you'll have to be able to track the obs source for R too)
+! if abs (model - obs ) elevation > ??,  discard obs 
+
+! QC obs for land cover (below QC's update cell, but not obs) 
+! gross error check * 
+! screen stn obs for IMS snow cover 
+! screen snow cover-derived snow depth (IMS) if model has snow  * 
 
 !=============================================================================================
 ! 6. Perform the DA update, by looping over each grid cell 
@@ -400,13 +403,15 @@ CONTAINS
                 if (print_deb) print*, "proc ", myrank, " grid: ", jndx
                 if(num_stn>0) then 
                 ! currently: find station obs in radius, do gross error check, and limit to 50 obs
+                ! QC: gross error check is done in this call.
                         call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
                                         Lat_stn, Lon_stn,  num_stn, obs_srch_rad, max_num_nearStn,   &
                                         stdev_back, stdev_obsv, obs_tolerance,                 &
                                         SNOFCS_at_stn, SNOOBS_stn,                                              &
                                         index_back_at_nearStn,  num_loc_1) !,      &LENSFC,
                         if (print_deb) print*, "number of stn sndpth obs ", num_loc_1
-                endif                         
+                endif         
+                ! legacy code to collect IMS obs from surrounding grid cells.                 
                 ! if ( assim_sncov .AND. (IH_loc == ims_assm_hour) ) then
                 !         Call nearest_IMS_Locations(LENSFC, max_num_nearIMS, obs_srch_rad, &
                 !                         ims_max_ele, RLA(jndx), RLO(jndx), RLA, RLO, OROG, & 
@@ -415,25 +420,28 @@ CONTAINS
                 !         if (num_loc_2 > 0) assim_sncov_thisGridCell = .TRUE.
                 !         if (print_deb) print*, " number of IMS obs: ", num_loc_2                                                                       
                 ! endif
+                ! QC: -for this grid cell, test IMS above ims_max_ele 
+                !     -if model and IMS have 100% snow cover, delete the IMS snow depth value
+                !     
                 if( assim_sncov .AND. (IH_loc == ims_assm_hour) .AND. &
                     (.NOT. IEEE_IS_NAN(SNOFCS(jndx))) .AND. &
                     (.NOT. IEEE_IS_NAN(SNO_IMS_at_Grid(jndx))) .AND. &
                     (OROG(jndx) <= ims_max_ele) .AND. &
-                    ( .not.(SWEFCS(jndx) >= SNUP_Array(jndx) .AND. & 
+                    ( .not.( (SWEFCS(jndx) >= SNUP_Array(jndx)) .AND. & 
                        SNO_IMS_at_Grid(jndx) >= SNUP_Array(jndx)) ) ) then
                         num_loc_2 = 1 
                         assim_sncov_thisGridCell = .TRUE.                
                 endif
                 num_loc = num_loc_1 + num_loc_2                
                 ! if assim_sncov=false >> num_loc_1=num_loc
-                if((num_loc > 0) .and. ( LANDMASK(jndx) == 1 )) then ! .and. (SNCOV_IMS(jndx) > 0.)) then    
+                ! QC: only update this grid cell if it is land.
+                if((num_loc > 0) .and. ( LANDMASK(jndx) == 1 )) then 
                         ! get background states
                         Allocate(back_at_Obs(num_loc))
                         Allocate(obs_Array(num_loc))
                         Allocate(Lat_Obs(num_loc))
                         Allocate(Lon_Obs(num_loc))
                         Allocate(orogfcs_Obs(num_loc))                        
-                        ! snow depth/swe 
                         if(num_loc_1 > 0) then
                                 Do zndx = 1, num_loc_1     
                                         back_at_Obs(zndx) = SNOFCS_at_stn(index_back_at_nearStn(zndx))
@@ -453,12 +461,14 @@ CONTAINS
                         !                 orogfcs_Obs(num_loc_1+zndx) = OROG(index_back_at_nearIMS(zndx))  !Ele_IMS(jndx)
                         !         End Do
                         ! endif
+
+                        ! Append IMS-derived snow depth to the obs array 
                         if(assim_sncov_thisGridCell) then                                
                                 back_at_Obs(num_loc) = SNOFCS(jndx)
                                 obs_Array(num_loc) = SNO_IMS_at_Grid(jndx)
-                                Lat_Obs(num_loc) = RLA(jndx)   !Lat_IMS_atGrid(jndx)
-                                Lon_Obs(num_loc) = RLO(jndx)   !Lon_IMS_atGrid(jndx)jndx
-                                orogfcs_Obs(num_loc) = OROG(jndx)  !Ele_IMS(jndx)
+                                Lat_Obs(num_loc) = RLA(jndx)   
+                                Lon_Obs(num_loc) = RLO(jndx) 
+                                orogfcs_Obs(num_loc) = OROG(jndx)
                         endif
                         ! compute covariances
                         Allocate(B_cov_mat(num_loc, num_loc))
@@ -472,7 +482,7 @@ CONTAINS
                         !         assim_sncov_thisGridCell, ims_correlated,            &
                         !         B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
                         call compute_covariances(RLA(jndx), RLO(jndx), OROG(jndx), SNOFCS(jndx),    &
-                                Lat_Obs, Lon_Obs, orogfcs_Obs, num_loc,    			 &
+                                Lat_Obs, Lon_Obs, orogfcs_Obs, num_loc,   &
                                 Stdev_back, Stdev_Obsv, Stdev_Obsv_ims,      &
                                 L_horz, h_ver,                                   &   !L_horz in Km, h_ver in m
                                 assim_sncov_thisGridCell,                          &
@@ -496,22 +506,8 @@ CONTAINS
                         DEALLOCATE(back_at_Obs, obs_Array)
                         DEALLOCATE(Lat_Obs, Lon_Obs, orogfcs_Obs, obs_Innov)
                         DEALLOCATE(B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
-                        ! QCC by ims--use ims as snow mask
-                        ! if (assim_sncov) then
-                        !         if((SNCOV_IMS(jndx) >= 0.5) .and. (SNOANL(jndx) < 50.)) then
-                        !                 SNOANL(jndx) = 50.
-                        !         ! elseif((SNCOV_IMS(jndx) < 0.5) .and. (SNCOV_IMS(jndx) > 0.1) .and. (anl_at_Grid(jndx) >= 50)) then
-                        !         !       anl_at_Grid(jndx) = 50.
-                        !         elseif((SNCOV_IMS(jndx) < 0.1) .and. (SNOANL(jndx) >= 0.)) then
-                        !                         SNOANL(jndx) = 0.
-                        !         endif
-                        !         if ((p_tN==1) .and. (p_tRank==0) .and. print_deb) then                                          
-                        !                 PRINT*, "analyis at grid after mask: ", SNOANL(jndx)
-                        !         endif
-                        ! endif
 
                 else
-                        ! print*, " NO DA loop: ", jndx
                         SNOANL(jndx) = SNOFCS(jndx) ! if not land, or no obs avail keep forecast
                 endif
                 if (allocated(index_back_at_nearStn))  Deallocate(index_back_at_nearStn) 
