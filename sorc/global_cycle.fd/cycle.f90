@@ -94,7 +94,7 @@
  include 'mpif.h'
 
  CHARACTER(LEN=3) :: DONST
- INTEGER :: IDIM, JDIM, LSOIL, LUGB, IY, IM, ID, IH, IALB
+ INTEGER :: IDIM, JDIM, LSOIL, LUGB, IY, IM, ID, IH, IALB, NUM_TILES
  INTEGER :: ISOT, IVEGSRC, LENSFC, ZSEA1_MM, ZSEA2_MM, IERR
  INTEGER :: NPROCS, MYRANK, NUM_THREADS, NUM_PARTHDS, MAX_TASKS, SNOW_OI_TYPE
  REAL    :: FH, DELTSFC, ZSEA1, ZSEA2
@@ -128,7 +128,7 @@
                   assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
                   GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
 !
- DATA IDIM,JDIM,LSOIL/96,96,4/
+ DATA IDIM,JDIM,LSOIL,NUM_TILES/96,96,4,6/ 
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
@@ -192,11 +192,12 @@
 
  ! do snow OI, if requested
  IF (SNOW_OI_TYPE .gt. 0) then
+    PRINT*,"snowDA: calling OI on RANK" , MYRANK
     ALLOCATE(SNOANL(LENSFC))
     CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
     ! s_assm_hour =18
     ! if (IH == s_assm_hour) then
-    Call Snow_Analysis_OI(SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
+    Call Snow_Analysis_OI(SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
                           num_assim_steps, dT_Asssim,  & 
                           LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
                           horz_len_scale, ver_len_scale, obs_tolerance, &
@@ -207,6 +208,7 @@
                           SNOANL)
     ! Call map_outputs_toObs(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
     !                        LENSFC, CURRENT_ANALYSIS_PATH)
+    PRINT*,"snowDA: returned from OI on RANK", MYRANK
  ENDIF
 
  IF (MAX_TASKS < 99999 .AND. MYRANK > (MAX_TASKS - 1)) THEN

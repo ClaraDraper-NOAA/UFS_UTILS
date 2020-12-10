@@ -7,7 +7,7 @@ Use, Intrinsic :: IEEE_ARITHMETIC
 
 CONTAINS
 
- subroutine Snow_Analysis_OI(SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &  
+ subroutine Snow_Analysis_OI(SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &  
                                 num_assim_steps, dT_Asssim,  & 
                                 LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
                                 L_horz , h_ver, obs_tolerance, &
@@ -45,7 +45,7 @@ CONTAINS
         
         integer, parameter :: dp = kind(1.d0)
 
-        INTEGER, intent(in)    :: SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, &
+        INTEGER, intent(in)    :: SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, &
                                   IY, IM, ID, IH, LENSFC, IVEGSRC, num_assim_steps 
         LOGICAL, intent(in)    :: assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated
         CHARACTER(len=4), intent(in)   :: stn_var ! should probably be called control_var
@@ -61,7 +61,7 @@ CONTAINS
         INTEGER, intent(in) :: max_num_nearStn, max_num_nearIMS, num_subgrd_ims_cels 
         REAL, intent(Out)   :: SNOANL(LENSFC) 
         CHARACTER(LEN=5)    :: TILE_NUM
-        Character(LEN=3)    :: rank_str
+        Character(LEN=1)    :: rank_str
         INTEGER                     :: IERR     
         REAL        :: RLA(LENSFC), RLO(LENSFC), RLO_Tile(LENSFC), OROG(LENSFC)  !, OROG_UF(LENSFC)
         REAL                :: SNDFCS(LENSFC), SWEFCS(LENSFC), SNDANL(LENSFC), SWEANL(LENSFC)
@@ -91,7 +91,7 @@ CONTAINS
         REAL                     :: innov_at_Grid(LENSFC)
         Real, Allocatable        :: obs_Innov(:), OmB_innov_at_stn(:)
 
-        CHARACTER(len=250)       :: forc_inp_path, da_out_file  !anl_inp_path,
+        CHARACTER(len=250)       :: forc_inp_file, da_out_file  !anl_inp_path,
         CHARACTER(LEN=3)         :: RANKCH 
 
         REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
@@ -111,11 +111,17 @@ CONTAINS
         REAL               :: tmp
         INTEGER            :: istep, IY_loc, IM_loc, ID_loc, IH_loc
         REAL               :: IH_real
-        INTEGER            :: num_print
+        INTEGER, PARAMETER :: PRINTRANK = 4 
+! CSD-todo, should be same as in sfcsub. Share properly
+        real, paramete :: nodata_val = -9999.9
 
 !=============================================================================================
 ! 1. initialise vars,set-up processors, and read lat/lon from orog files.
 !=============================================================================================
+
+        !initialse output with nodata
+        SNOANL= nodata_val
+
         assim_snpack_stn = assim_SnowPack_obs ! if assimilating GHCND, doesn't have SWE obs. need to convert to SWE
         assim_sncov =  assim_SnowCov_obs  
 
@@ -139,13 +145,13 @@ CONTAINS
         endif
 
 !total number of processors used = Multiple of 6: any extra processors sent to end of subroutine
-        IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", MAX_TASKS
+        IF (myrank ==PRINTRANK) PRINT*,"snowDA: OI total num proc ", NPROCS, " Num tiles : ", NUM_TILES
 
-        Np_ext = MOD(NPROCS, MAX_TASKS)  ! extra/inactive procs
+        Np_ext = MOD(NPROCS, NUM_TILES)  ! extra/inactive procs
         if (MYRANK >  NPROCS - Np_ext - 1) goto 999
-        Np_til = NPROCS / MAX_TASKS  ! num proc. per tile 
-        p_tN = MOD(MYRANK, MAX_TASKS)  ! tile for proc.
-        p_tRank = MYRANK / MAX_TASKS  ! proc. rank within tile
+        Np_til = NPROCS / NUM_TILES  ! num proc. per tile 
+        p_tN = MOD(MYRANK, NUM_TILES)  ! tile for proc.
+        p_tRank = MYRANK / NUM_TILES  ! proc. rank within tile
         N_sA = LENSFC / Np_til  ! sub array length per proc
         N_sA_Ext = LENSFC - N_sA * Np_til ! extra grid cells
         if(p_tRank == 0) then 
@@ -154,7 +160,7 @@ CONTAINS
                 mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
         endif
         mp_end = (p_tRank + 1) * N_sA + N_sA_Ext                ! end index of subarray for proc        
-        If(myrank == 0 )PRINT*,"sub array length ", N_sA, " extra sub array: ", N_sA_Ext
+        If(myrank == PRINTRANK )PRINT*,"snowDA: sub array length ", N_sA, " extra sub array: ", N_sA_Ext
 ! if (p_tN /= 4 ) goto 999
 
 ! must have at least one kind of obs: depth or area. If no obs files: go to end 
@@ -210,24 +216,39 @@ CONTAINS
         if (SFC_FORECAST_PREFIX(1:8).eq.'        ') then
                 ! FNBGSI = "./fnbgsi." // RANKCH
                 WRITE(RANKCH, '(I3.3)') (p_tN+1)
-                forc_inp_path = "./fnbgsi." // RANKCH
+                forc_inp_file = "./fnbgsi." // RANKCH
         else
-                forc_inp_path = TRIM(SFC_FORECAST_PREFIX)//TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"."//TRIM(h_str)// &
+                forc_inp_file = TRIM(SFC_FORECAST_PREFIX)//TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"."//TRIM(h_str)// &
                                      "0000.sfc_data."//TILE_NUM//".nc"
         end if
+
+        if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading model backgroundfile', trim(forc_inp_file) 
                                      
-        Call READ_Forecast_Data_atPath(forc_inp_path, veg_type_landice, LENSFC, SWEFCS, SNDFCS, &
+        Call READ_Forecast_Data_atPath(forc_inp_file, veg_type_landice, LENSFC, SWEFCS, SNDFCS, &
                                        VETFCS, LANDMASK)
 
+        ! initialise analysis to forecast (mostly to retain non-land snow states, which are not updated)
+        SWEANL = SWEFCS
+        SNDANL = SNDFCS 
         if (assim_SWE) then 
            SNOFCS=SWEFCS  
         else 
            SNOFCS=SNDFCS 
         endif
+        
         ! average snow density of snow over non-glacier land.
         SNODENS_DIST = SWEFCS/SNDFCS
-        snodens = SUM(SWEFCS/SNDFCS, Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
+        if (COUNT (LANDMASK==1 .and. SNDFCS> 0.01) > 0) then 
+                snodens = SUM(SWEFCS/SNDFCS, Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
                          / COUNT (LANDMASK==1 .and. SNDFCS> 0.01) 
+                if (MYRANK==PRINTRANK) & 
+                        PRINT *, 'snowDA: mean density ', snodens 
+        else 
+                snodens = 0.1  ! default value if have no snow in tile
+                if (MYRANK==PRINTRANK) & 
+                        PRINT *, 'snowDA: no snow in current tiles, using default density ', snodens 
+        endif
+        PRINT *, 'snowDA:density ', MYRANK, snodens 
         ! for grid cells with no valid density, fill in the average snodens
         Where(.not.(LANDMASK==1 .and. SNDFCS>0.01 )) SNODENS_DIST = snodens
         If (p_tRank==0)  print*, "Tile ", p_tN, ' mean snow density', snodens
@@ -238,6 +259,9 @@ CONTAINS
                          / COUNT (LANDMASK==1 .and. SNDFCS> 0.01)
         If (p_tRank==0)  print*, "Tile ", p_tN,  ' mean SND', tmp
         
+        If (p_tRank==0)  print*, "CSDTile ", p_tN, ' mean snow density', snodens
+        If (p_tRank==0)  print*, "CSDTile ", p_tN, ' sndfcs', sndfcs(1:10) 
+        If (p_tRank==0)  print*, "CSDTile ", p_tN, ' swefcs', swefcs(1:10) 
 !=============================================================================================
 ! 3. Read observations
 !=============================================================================================
@@ -247,6 +271,7 @@ CONTAINS
         if (assim_snpack_stn) then 
              ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
                                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"
+             if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading GHCN file', trim(ghcnd_inp_file) 
              dim_name = "Site_Id"    
              call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
                         lat_min, lat_max, lon_min, lon_max, & 
@@ -279,13 +304,14 @@ CONTAINS
             ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
             ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
                                                        ".IMS.Indices."//TRIM(TILE_NUM)//".nc"                       
+             if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading IMS file', trim(ims_inp_file) 
             Call Observation_Read_IMS_Full(ims_inp_file, ims_inp_file_indices, &
                                                        MYRANK, JDIM, IDIM, num_subgrd_ims_cels, SNCOV_IMS)
             if((p_tRank==0) .and. (p_tN==1) .and. print_deb) then
                     PRINT*, "SNCOV from rank: ", MYRANK
                     PRINT*, SNCOV_IMS
             endif 
-            if (myrank==0) PRINT*,'Finished reading SNCOV, converting to snow depth' 
+            if (myrank==PRINTRANK) PRINT*,'Finished reading SNCOV, converting to snow depth' 
 
             call CalcSWEFromSnowCover(SNCOV_IMS, VETFCS, LENSFC, SNO_IMS_at_Grid, SNUP_Array)
 
@@ -295,7 +321,7 @@ CONTAINS
                     PRINT*, "SNCOV obs at each grid cell from rank: ", MYRANK
                     PRINT*, SNO_IMS_at_Grid
             endif
-            if (myrank==0) PRINT*,'Finished converting SNCOV observations'
+            if (myrank==PRINTRANK) PRINT*,'Finished converting SNCOV observations'
         
         endif ! read_IMS 
 
@@ -330,7 +356,7 @@ CONTAINS
 
     ! CSD todo: separate out eval call and obs operator call. model info (SNOOBS_stn shouldn't be in the obs operator)
     !           for JEDI, probably also want to add snow depth derived from snow cover here.
-            Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
+            Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, & 
                                 RLA, RLO, OROG, Lat_stn, Lon_stn,   &
                                 LENSFC, num_stn, num_Eval, bkgst_srch_rad, SNOFCS, SNOOBS_stn,  &
                                 SNOFCS_at_stn, OROGFCS_at_stn, index_back_atObs, index_back_atEval, &
@@ -368,7 +394,7 @@ CONTAINS
                     PRINT*, "O - B (innovation at obs points)"
                     PRINT*, OmB_innov_at_stn 
             endif
-            if (myrank==0) PRINT*,'Finished observation operator for station data'         
+            if (myrank==PRINTRANK) PRINT*,'Finished observation operator for station data'         
         endif ! num_stn > 0
 
 !=============================================================================================
@@ -396,7 +422,7 @@ CONTAINS
 !=============================================================================================
  
         !obs_srch_rad = 250. ! radius of observation search
-        if (myrank==0) PRINT*,'Starting DA loop'
+        if (myrank==PRINTRANK) PRINT*,'Starting DA loop'
         Do jndx = mp_start, mp_end     !LENSFC/2, LENSFC ! 442369, 442370   !
                 num_loc_1 = 0
                 num_loc_2 = 0
@@ -509,18 +535,18 @@ CONTAINS
                         DEALLOCATE(Lat_Obs, Lon_Obs, orogfcs_Obs, obs_Innov)
                         DEALLOCATE(B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
 
-                else
-                        SNOANL(jndx) = SNOFCS(jndx) ! if not land, or no obs avail keep forecast
                 endif
                 if (allocated(index_back_at_nearStn))  Deallocate(index_back_at_nearStn) 
                 if (allocated(index_back_at_nearIMS))  Deallocate(index_back_at_nearIMS)                 
         End do
         CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-        if (myrank==0) PRINT*, ' Finished DA loops'
+        if (myrank==PRINTRANK) PRINT*, ' Finished DA loops'
         
 !=============================================================================================
-! 7. Write debug outputs
+! 7. Clean up, write outputs 
 !=============================================================================================
+
+! collect results onto main tasks, if necessary
 
 ! ToDO: Better way to handle this? ! CSD - I'll fix this later.
 ! Real data type size corresponding to mpi
@@ -537,7 +563,7 @@ CONTAINS
                 Stop
         endif
         ! send analyses arrays to 'tile-level root' proc.               
-        if (MYRANK > (MAX_TASKS - 1) ) then
+        if (MYRANK > (NUM_TILES - 1) ) then
                 call MPI_SEND(SNOANL(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
                                           MYRANK, MPI_COMM_WORLD, IERR) 
                 call MPI_SEND(innov_at_Grid(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
@@ -545,17 +571,18 @@ CONTAINS
         else    !if(p_tRank == 0) then  
                 Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
                         dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-                        send_proc = MYRANK +  pindex * MAX_TASKS
+                        send_proc = MYRANK +  pindex * NUM_TILES
                         call MPI_RECV(SNOANL(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
                                           send_proc, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
                         call MPI_RECV(innov_at_Grid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
                                           send_proc*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
                 enddo
         endif
-        if (myrank==0) PRINT*,'Finished Data copy'
+        if (myrank==PRINTRANK) PRINT*,'Finished Data copy'
 
-        if (MYRANK > MAX_TASKS - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
+        if (MYRANK > NUM_TILES - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
 
+! fill in SWE and SND arrays       
         ! avoid -ve anl
         Where(SNOANL < 0.) SNOANL = 0.
         if (print_deb) then
@@ -564,13 +591,16 @@ CONTAINS
             PRINT*, "Analysis SWE/ snwd  from rank: ", MYRANK
             PRINT*, SNOANL
         endif
-        ! d = swe/snd
+        ! d = swe/sndi
+
         ! this is for writing outputs at observation and evaluation points
+        ! SWE, SND will be updated seperately within sfcsub (using new snow density 
+        ! instead of mean for new snow).
         if (assim_SWE)  then 
                 SWEANL = SNOANL 
-                SNDANL = SNOANL / SNODENS_DIST
+                WHERE (LANDMASK==1) SNDANL = SNOANL / SNODENS_DIST
         else
-                SWEANL = SNOANL * SNODENS_DIST
+                WHERE (LANDMASK==1) SWEANL = SNOANL * SNODENS_DIST
                 SNDANL = SNOANL
         endif
 
@@ -590,12 +620,12 @@ CONTAINS
                 endif
         End do
         ! write outputs 
-        Write(rank_str, '(I3.3)') (MYRANK+1)
+        Write(rank_str, '(I1.1)') (MYRANK+1)
         ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis/"
-        da_out_file = "./SNOANLOI."// &  !
-                                  TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !  
+        da_out_file = "./SNOANLOI.tile"//rank_str//".nc"  !
+        !                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !  
         call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
-                              SWEFCS, SWEANL, SNDFCS, SNDANL, &  !
+                              SWEFCS, SWEANL, SNDFCS, SNDANL, LANDMASK,&  !
                               num_stn, Lat_stn, Lon_stn, SNOOBS_stn, SNOFCS_at_stn, OmB_innov_at_stn,  &                                
                               innov_at_Grid, SNCOV_IMS, &
                               num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
@@ -619,7 +649,7 @@ CONTAINS
         
         Call UPDATEtime(IY_loc, IM_loc, ID_loc, IH_real, dT_Asssim)
         IH_loc = INT(IH_real)    ! (for the obs. available currently) this should be 18
-        if (myrank==0) PRINT*,'Finished OI DA at datetime: ', y_str, m_str, d_str, h_str
+        if (myrank==PRINTRANK) PRINT*,'Finished OI DA at datetime: ', y_str, m_str, d_str, h_str
         
     End do
 
@@ -715,7 +745,7 @@ CONTAINS
 
  ! the following code based on write_data() in read_write_data.f90
  Subroutine Write_DA_Outputs(output_file, idim, jdim, lensfc, myrank,   &
-                                 snoforc, snoanl, snwdforc, snwdanal,   &
+                                 snoforc, snoanl, snwdforc, snwdanal, landmask,  &
                                  num_stn, Lat_atObs, Lon_atObs, OBS_stn, FCS_at_stn, OmB_innov_at_stn,  & 
                                  inovatgrid, SNCOV_IMS, &
                                  num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
@@ -732,6 +762,7 @@ CONTAINS
         CHARACTER(LEN=*), Intent(In)      :: output_file
         integer, intent(in)         :: idim, jdim, lensfc, num_stn
         real, intent(in)            :: snoforc(lensfc), snoanl(lensfc), snwdforc(lensfc), snwdanal(lensfc)
+        integer, intent(in)         :: landmask(lensfc)
         Real, intent(in)            :: OBS_stn(num_stn), FCS_at_stn(num_stn), OmB_innov_at_stn(num_stn)
         Real, intent(in)            :: Lat_atObs(num_stn), Lon_atObs(num_stn)
         Real, intent(in)            :: inovatgrid(lensfc), SNCOV_IMS(lensfc)  !, anl_fSCA(lensfc)
@@ -747,7 +778,7 @@ CONTAINS
         integer                     :: dim_x, dim_y, dim_time, dim_eval, dim_stn
         integer                     :: id_x, id_y, id_time
         integer       :: id_swe_forc, id_swe, id_snwdf, id_snwd, id_innov, id_imscov   !, id_anlscov
-        integer       :: id_latstn, id_lonstn, id_obsstn, id_forcstn, id_innovstn
+        integer       :: id_latstn, id_lonstn, id_obsstn, id_forcstn, id_innovstn, id_landmask
         integer       :: id_lateval, id_loneval, id_obseval, id_forceval, id_anleval, id_innoveval   !, id_cur_anleval, , id_anlscov
         
         integer                     :: myrank
@@ -812,6 +843,13 @@ CONTAINS
         dims_3d(1) = dim_x
         dims_3d(2) = dim_y
         dims_3d(3) = dim_time
+
+        error = nf90_def_var(ncid, 'LandMask', NF90_INT, dims_3d, id_landmask)
+        call netcdf_err(error, 'DEFINING LandMask' )
+        error = nf90_put_att(ncid, id_landmask, "long_name", "Masl: 1=non glacier land")
+        call netcdf_err(error, 'DEFINING LandMask LONG NAME' )
+        error = nf90_put_att(ncid, id_landmask, "units", "binary")
+        call netcdf_err(error, 'DEFINING LandMask UNITS' )
 
         error = nf90_def_var(ncid, 'SWE_Forecast', NF90_DOUBLE, dims_3d, id_swe_forc)
         call netcdf_err(error, 'DEFINING SWE_Forecast' )
@@ -983,6 +1021,10 @@ CONTAINS
         dims_end(2) = jdim
         dims_end(3) = 1
         
+        dum2d = reshape(landmask, (/idim,jdim/))
+        error = nf90_put_var( ncid, id_landmask, dum2d, dims_strt, dims_end)
+        call netcdf_err(error, 'WRITING LandMask RECORD' )
+
         dum2d = reshape(snoforc, (/idim,jdim/))
         error = nf90_put_var( ncid, id_swe_forc, dum2d, dims_strt, dims_end)
         call netcdf_err(error, 'WRITING SWE Forecast RECORD' )
@@ -1101,7 +1143,7 @@ CONTAINS
         
  End SUBROUTINE Observation_Read_atEval
 
- SUBROUTINE Find_Nearest_GridIndices_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, &
+ SUBROUTINE Find_Nearest_GridIndices_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, &
                                             num_src, num_tar, RLA_cg, RLO_cg, RLA, RLO, index_ens_atGrid)
                             
         IMPLICIT NONE
@@ -1109,7 +1151,7 @@ CONTAINS
         !USE intrinsic::ieee_arithmetic
         include "mpif.h"
         
-        Integer, Intent(In)          :: Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, num_src, num_tar
+        Integer, Intent(In)          :: Myrank, NUM_TILES, p_tN, p_tRank, Np_til, num_src, num_tar
         Real, Intent(In)                :: RLA_cg(num_src), RLO_cg(num_src), RLA(num_tar), RLO(num_tar)
         Integer, Intent(Out)         :: index_ens_atGrid(num_tar)
         Real                        :: RLA_cg_rad(num_src), RLO_cg_rad(num_src)
@@ -1167,22 +1209,22 @@ CONTAINS
                 Stop
         endif
     
-        if (MYRANK > (MAX_TASKS - 1) ) then
+        if (MYRANK > (NUM_TILES - 1) ) then
                 call MPI_SEND(index_ens_atGrid(mp_start:mp_end), N_sA, mpiInt_size, p_tN,   &
                                                 MYRANK*1000, MPI_COMM_WORLD, IERR)
         else !if (MYRANK == p_tN ) then  
                 Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
                         dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-                        send_proc = MYRANK +  pindex * MAX_TASKS
+                        send_proc = MYRANK +  pindex * NUM_TILES
                         call MPI_RECV(index_ens_atGrid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiInt_size, send_proc, &
                                                 send_proc*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
                 enddo
         endif
     !ToDO: better way to do this?
         ! now share the whole array
-        if (MYRANK < MAX_TASKS ) then   !if (MYRANK == p_tN ) then      
+        if (MYRANK < NUM_TILES ) then   !if (MYRANK == p_tN ) then      
                 Do pindex =  1, (Np_til - 1)   ! receiving proc index within tile group
-                        rec_proc = MYRANK +  pindex * MAX_TASKS
+                        rec_proc = MYRANK +  pindex * NUM_TILES
                         call MPI_SEND(index_ens_atGrid, num_tar, mpiInt_size, rec_proc, MYRANK*100, MPI_COMM_WORLD, IERR)
                 enddo
         else 
@@ -1193,7 +1235,7 @@ CONTAINS
         
  END SUBROUTINE Find_Nearest_GridIndices_Parallel
      
- SUBROUTINE read_ensemble_forcing(MYRANK, MAX_TASKS, TILE_NUM, ens_size, LENSFC, IDIM_In, JDIM_In, & 
+ SUBROUTINE read_ensemble_forcing(MYRANK, NUM_TILES, TILE_NUM, ens_size, LENSFC, IDIM_In, JDIM_In, & 
                                         index_ens_atGrid,    &
                                     ens_inp_path, y_str, m_str, d_str, h_str, hprev_str, &
                                     assim_SWE, save_Ens, SNOFCS_Inp_Ens, da_out_file)    ! assim_SWE, 
@@ -1202,7 +1244,7 @@ CONTAINS
 
         include "mpif.h"
 
-        INTEGER, INTENT(IN)       :: MYRANK, MAX_TASKS, ens_size, LENSFC        
+        INTEGER, INTENT(IN)       :: MYRANK, NUM_TILES, ens_size, LENSFC        
         CHARACTER(LEN=5), INTENT(In)      :: TILE_NUM
         INTEGER, Intent(In)               :: IDIM_In, JDIM_In
         Integer, Intent(In)                :: index_ens_atGrid(LENSFC)
@@ -1286,7 +1328,7 @@ CONTAINS
                 ERROR = NF90_CLOSE(NCID)
         End do
         
-        If (save_Ens .and. (Myrank < MAX_TASKS)) then
+        If (save_Ens .and. (Myrank < NUM_TILES)) then
         
                 print*,"Process ", myrank, "writing ens snow forc data to: ",trim(da_out_file)
                 
@@ -1495,6 +1537,7 @@ CONTAINS
 
         REAL(KIND=8), ALLOCATABLE :: DUMMY(:,:)
         REAL                      :: SLMASK(LENSFC)
+        LOGICAL                   :: file_exists
 
         !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
         ! WRITE(RANKCH, '(I3.3)') (MYRANK+1)
@@ -1503,6 +1546,15 @@ CONTAINS
 
         !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
         ! if (print_deb) PRINT*, "READ INPUT SFC DATA FROM: "//TRIM(forc_inp_path)
+        
+        INQUIRE(FILE=trim(forc_inp_path), EXIST=file_exists)
+
+        if (.not. file_exists) then 
+                print *, 'READ_Forecast_Data_atPath error,file does not exist', &   
+                        trim(forc_inp_path) , ' exiting'
+                call MPI_ABORT(MPI_COMM_WORLD, 10) ! CSD - add proper error trapping?
+        endif
+                
 
         ERROR=NF90_OPEN(TRIM(forc_inp_path), NF90_NOWRITE,NCID)
         CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(forc_inp_path) )
@@ -1906,7 +1958,7 @@ CONTAINS
           
  end function lyear
 
-! subroutine Snow_Analysis_OI_multiTime(SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, DELTSFC, num_steps, &  
+! subroutine Snow_Analysis_OI_multiTime(SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, DELTSFC, num_steps, &  
 ! !                                                         LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
 ! !                                                         L_horz , h_ver, obs_tolerance, ims_max_ele, , &
 ! !                                                         GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, &
@@ -1940,7 +1992,7 @@ CONTAINS
         
 !         integer, parameter :: dp = kind(1.d0)
 
-!         INTEGER, intent(in) :: SNOW_OI_TYPE, MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, IVEGSRC     
+!         INTEGER, intent(in) :: SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, LENSFC, IVEGSRC     
 !         CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, & 
 !                                                                           IMS_INDEXES_PATH              !, CURRENT_ANALYSIS_PATH
 ! !  GHCND_SNOWDEPTH_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/GHCND/",
@@ -2030,13 +2082,13 @@ CONTAINS
 
 ! ! CSD  - do we need some checks in here to make sure we have enough processors? 
 ! ! perhaps also write out any extra processors
-!         IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", MAX_TASKS
+!         IF (myrank ==0) PRINT*,"Total num proc ", NPROCS, " Num tiles /Max.tasks: ", NUM_TILES
 
-!         Np_ext = MOD(NPROCS, MAX_TASKS)  ! extra/inactive procs
+!         Np_ext = MOD(NPROCS, NUM_TILES)  ! extra/inactive procs
 !         if (MYRANK >  NPROCS - Np_ext - 1) goto 999
-!         Np_til = NPROCS / MAX_TASKS  ! num proc. per tile 
-!         p_tN = MOD(MYRANK, MAX_TASKS)  ! tile for proc.
-!         p_tRank = MYRANK / MAX_TASKS  ! proc. rank within tile
+!         Np_til = NPROCS / NUM_TILES  ! num proc. per tile 
+!         p_tN = MOD(MYRANK, NUM_TILES)  ! tile for proc.
+!         p_tRank = MYRANK / NUM_TILES  ! proc. rank within tile
 !         N_sA = LENSFC / Np_til  ! sub array length per proc
 !         N_sA_Ext = LENSFC - N_sA * Np_til ! extra grid cells
 !         if(p_tRank == 0) then 
@@ -2222,7 +2274,7 @@ CONTAINS
 !     ! CSD todo: separate out eval call and obs operator call. model info (SNOOBS_stn shouldn't be in the obs operator)
 
 ! ! CSDCSD - could either add IMS in here, or take advantage of the obs being located on model grid cells to simplify 
-!             Call Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
+!             Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, & 
 !                                 RLA, RLO, OROG, Lat_stn, Lon_stn,   &
 !                                 LENSFC, num_stn, num_Eval, bkgst_srch_rad, SNOFCS, SNOOBS_stn,  &
 !                                 SNOFCS_at_stn, OROGFCS_at_stn, index_back_atObs, index_back_atEval, &
@@ -2439,7 +2491,7 @@ CONTAINS
 !                 Stop
 !         endif
 !         ! send analyses arrays to 'tile-level root' proc.               
-!         if (MYRANK > (MAX_TASKS - 1) ) then
+!         if (MYRANK > (NUM_TILES - 1) ) then
 !                 call MPI_SEND(SNOANL(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
 !                                           MYRANK, MPI_COMM_WORLD, IERR) 
 !                 call MPI_SEND(innov_at_Grid(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
@@ -2447,7 +2499,7 @@ CONTAINS
 !         else    !if(p_tRank == 0) then  
 !                 Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
 !                         dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-!                         send_proc = MYRANK +  pindex * MAX_TASKS
+!                         send_proc = MYRANK +  pindex * NUM_TILES
 !                         call MPI_RECV(SNOANL(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
 !                                           send_proc, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
 !                         call MPI_RECV(innov_at_Grid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
@@ -2456,7 +2508,7 @@ CONTAINS
 !         endif
 !         if (myrank==0) PRINT*,'Finished Data copy'
 
-!         if (MYRANK > MAX_TASKS - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
+!         if (MYRANK > NUM_TILES - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
 
 !         ! avoid -ve anl
 !         Where(SNOANL < 0.) SNOANL = 0.
