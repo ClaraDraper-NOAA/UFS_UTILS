@@ -113,7 +113,7 @@ CONTAINS
         REAL               :: IH_real
         INTEGER, PARAMETER :: PRINTRANK = 4 
 ! CSD-todo, should be same as in sfcsub. Share properly
-        real, paramete :: nodata_val = -9999.9
+        real, parameter :: nodata_val = -9999.9
 
 !=============================================================================================
 ! 1. initialise vars,set-up processors, and read lat/lon from orog files.
@@ -269,7 +269,7 @@ CONTAINS
 ! 3a. Read station obs (of snow depth or SWE)
 
         if (assim_snpack_stn) then 
-             ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"GHCND.SNWD."// &
+             ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"/GHCND.SNWD."// &
                                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"
              if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading GHCN file', trim(ghcnd_inp_file) 
              dim_name = "Site_Id"    
@@ -299,10 +299,10 @@ CONTAINS
 
        if (assim_sncov) then
             ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
-            ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"IMS.SNCOV."// &
+            ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"/IMS.SNCOV."// &
                                        TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"                      !
             ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/"
-            ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"C"//TRIM(ADJUSTL(fvs_tile))//&
+            ims_inp_file_indices = TRIM(IMS_INDEXES_PATH)//"/C"//TRIM(ADJUSTL(fvs_tile))//&
                                                        ".IMS.Indices."//TRIM(TILE_NUM)//".nc"                       
              if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading IMS file', trim(ims_inp_file) 
             Call Observation_Read_IMS_Full(ims_inp_file, ims_inp_file_indices, &
