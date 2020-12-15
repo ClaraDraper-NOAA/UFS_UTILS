@@ -116,22 +116,26 @@
  CHARACTER(LEN=500)  :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
                         IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
  CHARACTER(len=4)    :: stn_var 
- !Integer	           :: s_assm_hour
+ LOGICAL             :: STANDALONE_SNOWOI
 
  NAMELIST/NAMCYC/ IDIM,JDIM,LSOIL,LUGB,IY,IM,ID,IH,FH,    &
                   DELTSFC,IALB,USE_UFO,DONST,             &
                   ADJT_NST_ONLY,ISOT,IVEGSRC,ZSEA1_MM,    &
-                  ZSEA2_MM, MAX_TASKS, SNOW_OI_TYPE, PERCENT_OBS_WITHHELD,    &
+                  ZSEA2_MM, MAX_TASKS 
+
+ NAMELIST/NAMSNO/ SNOW_OI_TYPE, PERCENT_OBS_WITHHELD,    &
                   horz_len_scale, ver_len_scale, obs_tolerance, & 
                   obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &
                   ims_max_ele, num_subgrd_ims_cels, num_assim_steps, dT_Asssim, &
                   assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
-                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
+                  GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX, & 
+                  STANDALONE_SNOWOI
 !
  DATA IDIM,JDIM,LSOIL,NUM_TILES/96,96,4,6/ 
  DATA IY,IM,ID,IH,FH/1997,8,2,0,0./
  DATA LUGB/51/, DELTSFC/0.0/, IALB/1/, MAX_TASKS/99999/
  DATA ISOT/1/, IVEGSRC/2/, ZSEA1_MM/0/, ZSEA2_MM/0/
+! snow DA vars 
  DATA SNOW_OI_TYPE/0/
  DATA PERCENT_OBS_WITHHELD/0.0/
  DATA horz_len_scale/55.0/
@@ -153,13 +157,14 @@
  DATA IMS_SNOWCOVER_PATH/'        '/
  DATA IMS_INDEXES_PATH/'        '/
  DATA SFC_FORECAST_PREFIX/'        '/   ! leave this empty to use the default sfc_ files location
+ DATA STANDALONE_SNOWOI/.false./
 
  !     If (IDIM == 96) then   
  !         num_subgrd_ims_cels = 627    ! (max) number of IMS subcells within a tile grid cell           
  !         bkgst_srch_rad = 240.     !Km distance from gridcell to search for corresponding background state
  !     elseif (IDIM == 128) then
  !         num_subgrd_ims_cels = 627               
- !        bkgst_srch_rad = 240.          ! CSD  - this should be in a namelist. 
+ !        bkgst_srch_rad = 240.      
  !     elseif (IDIM == 768) then
  !         num_subgrd_ims_cels = 30
  !         bkgst_srch_rad = 27.                              !Km 
@@ -188,6 +193,13 @@
  READ(36, NML=NAMCYC)
  IF (MYRANK==0) WRITE(6,NAMCYC)
 
+ PRINT*
+ PRINT*,"READ NAMSNO NAMELIST."
+
+ CALL BAOPENR(360, "snowDA.nml", IERR)
+ READ(360, NML=NAMSNO)
+ IF (MYRANK==0) WRITE(6,NAMSNO)
+
  LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ! do snow OI, if requested
@@ -209,6 +221,10 @@
     ! Call map_outputs_toObs(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
     !                        LENSFC, CURRENT_ANALYSIS_PATH)
     PRINT*,"snowDA: returned from OI on RANK", MYRANK
+    IF (STANDALONE_SNOWOI == .TRUE.) then 
+        PRINT *,"standalone snow OI requested, skipping to end" 
+        GOTO 333 
+    ENDIF
  ENDIF
 
  IF (MAX_TASKS < 99999 .AND. MYRANK > (MAX_TASKS - 1)) THEN
