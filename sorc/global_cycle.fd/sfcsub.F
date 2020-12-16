@@ -1532,14 +1532,6 @@
       if (me==5) then 
           call monitr('sndanl read inQ',sndanl,slianl,glagen,sndanl,len) ! slianl is used in update 
       endif
-      !write(fname, "(a7,i3.3)") "sndanl_", me
-      !    open(unit=100+me,file=trim(fname), status ="replace", 
-     !&            action="write", form = "formatted") 
-     !     do i = 1, len
-     !           write(100+me, "(3(F9.3,2x))")  
-     !&                   rla(i), rlo(i), sndanl(i) 
-     !     enddo 
-     !     close(100+me) 
 
       zsca=100.
       call scale(zoranl,len, zsca)

@@ -2,21 +2,19 @@ MODULE M_Snow_Analysis
 
 USE NETCDF
 USE M_DA
-!USE MPI
 Use, Intrinsic :: IEEE_ARITHMETIC       
 
 CONTAINS
 
- subroutine Snow_Analysis_OI(SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &  
-                                num_assim_steps, dT_Asssim,  & 
+ subroutine Snow_Analysis_OI(NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &  
                                 LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
                                 L_horz , h_ver, obs_tolerance, &
-                                obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &                                
+                                obs_srch_rad, bkgst_srch_rad, max_num_nearStn, &
                                 ims_max_ele, num_subgrd_ims_cels, &
-                                assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
+                                assim_snowdepth_stn, assim_snowdepth_ims, stn_var, &
                                 GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
                                 IMS_INDEXES_PATH, SFC_FORECAST_PREFIX, &
-                                SNOANL)
+                                SNDANL)
                                                         
         !----------------------------------------------------------------------
         ! Input arguments: 
@@ -27,16 +25,13 @@ CONTAINS
         !
         ! Inputs, read from file:
         ! RLA, RLO: lat lon information for the tile
-        ! SNOFCS(LENSFC): forecast  snowdepth, or snow water equivalent forecat, as requested
         !
         ! Outputs:
-        ! SNOANL: snow analysis (of SWE or SND, see below)
+        ! SNDANL: snow depth analysis (units?)
         ! 
         ! Draper - changes to snow variables to clarify names, removed unnecesary conversions
         !          SWE - snow water equivalent 
         !          SND - snow depth 
-        !          SNO - generic variable to refer to either (determined by value of 
-        !                snow_OI_type
         !                   
         !----------------------------------------------------------------------
         IMPLICIT NONE
@@ -45,9 +40,9 @@ CONTAINS
         
         integer, parameter :: dp = kind(1.d0)
 
-        INTEGER, intent(in)    :: SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, &
-                                  IY, IM, ID, IH, LENSFC, IVEGSRC, num_assim_steps 
-        LOGICAL, intent(in)    :: assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated
+        INTEGER, intent(in)    :: NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, &
+                                  IY, IM, ID, IH, LENSFC, IVEGSRC
+        LOGICAL, intent(in)    :: assim_snowdepth_stn, assim_snowdepth_ims 
         CHARACTER(len=4), intent(in)   :: stn_var ! should probably be called control_var
         CHARACTER(LEN=*), Intent(In)   :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH
         CHARACTER(LEN=*), Intent(In)   :: SFC_FORECAST_PREFIX
@@ -55,53 +50,45 @@ CONTAINS
 !  IMS_SNOWCOVER_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/",
 !  IMS_INDEXES_PATH="/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS_INDEXES/",
 !  SFC_FORECAST_PREFIX = "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/fnbgsio/snow."
-        REAL, intent(In)    :: PERCENT_OBS_WITHHELD, dT_Asssim 
+        REAL, intent(In)    :: PERCENT_OBS_WITHHELD
         Real, intent(In)    :: L_horz , h_ver, obs_tolerance
         Real, intent(In)    :: obs_srch_rad, bkgst_srch_rad, ims_max_ele        
-        INTEGER, intent(in) :: max_num_nearStn, max_num_nearIMS, num_subgrd_ims_cels 
-        REAL, intent(Out)   :: SNOANL(LENSFC) 
+        INTEGER, intent(in) :: max_num_nearStn, num_subgrd_ims_cels 
+        REAL, intent(Out)   :: SNDANL(LENSFC) 
         CHARACTER(LEN=5)    :: TILE_NUM
         Character(LEN=1)    :: rank_str
         INTEGER                     :: IERR     
         REAL        :: RLA(LENSFC), RLO(LENSFC), RLO_Tile(LENSFC), OROG(LENSFC)  
-        REAL                :: SNDFCS(LENSFC), SWEFCS(LENSFC), SNDANL(LENSFC), SWEANL(LENSFC)
-        REAL                :: SNOFCS(LENSFC), VETFCS(LENSFC), SNUP_Array(LENSFC)
+        REAL                :: SNDFCS(LENSFC), SWEFCS(LENSFC), SWEANL(LENSFC), SCFANL(LENSFC) 
+        REAL                :: VETFCS(LENSFC), SNUP_Array(LENSFC)
         INTEGER             :: LANDMASK(LENSFC)
         CHARACTER(len=250)   :: dim_name, ghcnd_inp_file, ims_inp_file, ims_inp_file_indices
         CHARACTER(len=5)     :: y_str, m_str, d_Str, h_str, fvs_tile
-        REAL, ALLOCATABLE    :: SNOOBS_stn(:), SNOFCS_at_stn(:)               
+        REAL, ALLOCATABLE    :: SNDOBS_stn(:), SNDFCS_at_stn(:), SNDANL_at_stn(:)
         REAL, ALLOCATABLE    :: Lat_stn(:), Lon_stn(:), OROGFCS_at_stn(:)  
         REAL                 :: lat_min, lat_max, lon_min, lon_max      
         Real                 :: SNCOV_IMS(LENSFC)  ! ims resampled at each grid
-        Real                 :: SNO_IMS_at_Grid(LENSFC)
+        Real                 :: SND_IMS_at_Grid(LENSFC), SWE_IMS_at_Grid(LENSFC)
 
-        INTEGER :: num_stn, Num_Ims, num_Eval !num_subgrd_ims_cels !Num_Ims_Lat, Num_Ims_Lon
-        !Real    :: bkgst_srch_rad   ! radius_of_influence for selecting state at observation point
+        INTEGER :: num_stn, Num_Ims
         INTEGER :: jndx, zndx, ncol, nrow
         Integer, Allocatable   :: index_back_at_nearStn(:), index_back_at_nearIMS(:) !loc_near_Obs(:), 
         Integer                :: num_loc, num_loc_1, num_loc_2
-        Real, Parameter         :: Stdev_back_depth = 30., Stdev_Obsv_depth = 40., Stdev_Obsv_ims = 80. ! mm 
-        real                    :: stdev_obsv, stdev_back
-        Integer                         :: ims_assm_hour
-        !Real                           :: obs_tolerance, ims_max_ele
+        Real, Parameter         :: stdev_back_depth = 30., stdev_obsv_stn = 40., stdev_obsv_ims = 80. ! mm 
 
         Real(dp), Allocatable    :: B_cov_mat(:,:), b_cov_vect(:)
         Real(dp), Allocatable    :: O_cov_mat(:,:), W_wght_vect(:)
         Real, Allocatable        :: back_at_Obs(:), obs_Array(:), Lat_Obs(:), Lon_Obs(:), orogfcs_Obs(:)
-        REAL                     :: innov_at_Grid(LENSFC)
         Real, Allocatable        :: obs_Innov(:), OmB_innov_at_stn(:)
 
         CHARACTER(len=250)       :: forc_inp_file, da_out_file  !anl_inp_path,
         CHARACTER(LEN=3)         :: RANKCH 
 
-        REAL, ALLOCATABLE  :: SNOFCS_atEvalPts(:), innov_atEvalPts(:), SNOANL_atEvalPts(:)  !evalution points 
-        REAL, ALLOCATABLE  :: Lat_atEvalPts(:), Lon_atEvalPts(:), Obs_atEvalPts(:)     !evalution points
-        Integer, ALLOCATABLE    :: index_back_atEval(:)     ! background locations at eval points 
         Integer, ALLOCATABLE    :: index_back_atObs(:)   ! the location of background corresponding obs
+        Integer, ALLOCATABLE    :: array_index_back_atObs(:,:)   ! the location of background corresponding obs
 
-        Real               :: snodens, SNODENS_DIST(LENSFC)
-        LOGICAL            :: assim_snpack_stn, assim_SWE    !use swe as model state var? (instead of snow depth)
-        LOGICAL            :: assim_sncov, assim_sncov_thisGridCell    !assimilate sncov, 
+        Real               :: snodens, SNODENS_Grid(LENSFC)
+        LOGICAL            :: assim_sncov_thisGridCell    !assimilate sncov, 
 
         Integer            :: veg_type_landice  ! 10.21.20: no assmn over land ice
     ! for mpi par
@@ -109,34 +96,23 @@ CONTAINS
         INTEGER            :: send_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
         INTEGER            :: mpiReal_size, rsize
         REAL               :: tmp
-        INTEGER            :: istep, IY_loc, IM_loc, ID_loc, IH_loc
-        REAL               :: IH_real
         INTEGER, PARAMETER :: PRINTRANK = 4 
 ! CSD-todo, should be same as in sfcsub. Share properly
         real, parameter :: nodata_val = -9999.9
+        real, parameter :: nodata_tol = 0.0001
 
 !=============================================================================================
 ! 1. initialise vars,set-up processors, and read lat/lon from orog files.
 !=============================================================================================
 
+        if( (.not. assim_snowdepth_stn) .and. (.not. assim_snowdepth_ims) ) then
+                print*, "snowDA: No obs types selecteed, existing snow anal"  
+                return
+        end if
         !initialse output with nodata
-        SNOANL= nodata_val
+        SNDANL= nodata_val
 
-        assim_snpack_stn = assim_SnowPack_obs ! if assimilating GHCND, doesn't have SWE obs. need to convert to SWE
-        assim_sncov =  assim_SnowCov_obs  
-
-        If (SNOW_OI_TYPE == 2) then 
-                assim_SWE = .True.      ! note: if this is set true, need to establish stdev_obsv and stdev_back
-                                        !       and need to code readers for appropriate data sets
-                stdev_obsv = 0.1 * stdev_obsv_depth   ! assumes snodens = 0.1; need to refined
-                stdev_back = 0.1 * stdev_back_depth
-        ELSEIF (SNOW_OI_TYPE == 1) then 
-                assim_SWE = .False.                 
-                stdev_obsv = stdev_obsv_depth
-                stdev_back = stdev_back_depth    
-        ENDIF
         !obs_srch_rad = 250. ! radius of observation search
-        ims_assm_hour = 18 
         ! noah models specific? Needed to ID glaciers.
         if (IVEGSRC == 2) then   ! sib
                 veg_type_landice=13
@@ -163,16 +139,6 @@ CONTAINS
         If(myrank == PRINTRANK )PRINT*,"snowDA: sub array length ", N_sA, " extra sub array: ", N_sA_Ext
 ! if (p_tN /= 4 ) goto 999
 
-! must have at least one kind of obs: depth or area. If no obs files: go to end 
-        if (GHCND_SNOWDEPTH_PATH(1:8).eq.'        ') assim_snpack_stn = .false.
-        if ((IMS_SNOWCOVER_PATH(1:8).eq.'        ') .OR. (IMS_INDEXES_PATH(1:8).eq.'        ')) then
-                assim_sncov = .false.
-        end if
-        if( (.not. assim_snpack_stn) .and. (.not. assim_sncov) ) then
-                print*, "Observation paths don't exist!, skipping the OI DA"
-                goto 999
-        end if
-
 ! READ THE OROGRAPHY AND GRID POINT LAT/LONS FOR THE CUBED-SPHERE TILE p_tN
         CALL READ_LAT_LON_OROG_atRank(p_tN, RLA,RLO,OROG,TILE_NUM,IDIM,JDIM,LENSFC) !OROG_UF,
         if (print_deb) PRINT*,"Snow anl on ", MYRANK, " Tile group: ", p_tN, " Tile: ", TILE_NUM
@@ -191,20 +157,14 @@ CONTAINS
                 print*, TILE_NUM, " min/max lat/lon ", lat_min, lat_max, lon_min, lon_max
         endif
 
-! If multiple time steps are simulated in a given time period (window) given by num_assim_steps * dT_Assim
-! Note: the DA outputs from the last time step are returned        
-        IH_real = IH; IY_loc = IY; IM_loc=IM; ID_loc=ID; IH_loc=IH; ! these variables change inside loop below
-    Do istep = 1, num_assim_steps        
-                
-        write(y_str, "(I4)") IY_loc
-        write(m_str, "(I0.2)") IM_loc
-        write(d_str, "(I0.2)") ID_loc
-        write(h_str, "(I0.2)") IH_loc
+        write(y_str, "(I4)") IY
+        write(m_str, "(I0.2)") IM
+        write(d_str, "(I0.2)") ID
+        write(h_str, "(I0.2)") IH
         write(fvs_tile, "(I3)") IDIM
 
 ! controls calling of obs operator for stn data. If remains 0 will not be called.
         num_stn = 0 
-        num_Eval = 0
 
 !=============================================================================================
 ! 2. Read model forecast here, as need VETFCS and snow density for IMS snow depth calc. (later, separate read routines) 
@@ -227,19 +187,16 @@ CONTAINS
         Call READ_Forecast_Data_atPath(forc_inp_file, veg_type_landice, LENSFC, SWEFCS, SNDFCS, &
                                        VETFCS, LANDMASK)
 
-        ! initialise analysis to forecast (mostly to retain non-land snow states, which are not updated)
-        SWEANL = SWEFCS
-        SNDANL = SNDFCS 
-        if (assim_SWE) then 
-           SNOFCS=SWEFCS  
-        else 
-           SNOFCS=SNDFCS 
-        endif
-        
-        ! average snow density of snow over non-glacier land.
-        SNODENS_DIST = SWEFCS/SNDFCS
+        ! get the snow density  = SWE/SND
+        ! where snow present, use forecsts
+        ! where snow not present, use average from snow forecasts over land
+
+        SNODENS_Grid = SWEFCS/SNDFCS
+        WHERE (SNODENS_Grid < 0.0001) SNODENS_Grid = 0.
+
         if (COUNT (LANDMASK==1 .and. SNDFCS> 0.01) > 0) then 
-                snodens = SUM(SWEFCS/SNDFCS, Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
+                ! mean density over snow-covered land
+                snodens = SUM(SNODENS_Grid, Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
                          / COUNT (LANDMASK==1 .and. SNDFCS> 0.01) 
                 if (MYRANK==PRINTRANK) & 
                         PRINT *, 'snowDA: mean density ', snodens 
@@ -249,31 +206,32 @@ CONTAINS
                         PRINT *, 'snowDA: no snow in current tiles, using default density ', snodens 
         endif
         PRINT *, 'snowDA:density ', MYRANK, snodens 
+
         ! for grid cells with no valid density, fill in the average snodens
-        Where(.not.(LANDMASK==1 .and. SNDFCS>0.01 )) SNODENS_DIST = snodens
-        If (p_tRank==0)  print*, "Tile ", p_tN, ' mean snow density', snodens
+        Where( SNDFCS<0.01 ) SNODENS_Grid = snodens
+
+        If (p_tRank==0)  print*, "snowDA: tile ", p_tN, ' mean snow density', snodens
         tmp = SUM(SWEFCS,  Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
                          / COUNT (LANDMASK==1 .and. SNDFCS> 0.01)
-        If (p_tRank==0)  print*, "Tile ", p_tN,  ' mean SWE', tmp
+        If (p_tRank==0)  print*, "snowDA: tile ", p_tN,  ' mean SWE', tmp
         tmp = SUM(SNDFCS,  Mask = (LANDMASK==1 .and. SNDFCS>0.01 )) &
                          / COUNT (LANDMASK==1 .and. SNDFCS> 0.01)
-        If (p_tRank==0)  print*, "Tile ", p_tN,  ' mean SND', tmp
+        If (p_tRank==0)  print*, "snowDA: tile ", p_tN,  ' mean SND', tmp
         
-        If (p_tRank==0)  print*, "CSDTile ", p_tN, ' mean snow density', snodens
 !=============================================================================================
 ! 3. Read observations
 !=============================================================================================
 
 ! 3a. Read station obs (of snow depth or SWE)
 
-        if (assim_snpack_stn) then 
+        if (assim_snowdepth_stn) then 
              ghcnd_inp_file = TRIM(GHCND_SNOWDEPTH_PATH)//"/GHCND.SNWD."// &
                                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"
              if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading GHCN file', trim(ghcnd_inp_file) 
              dim_name = "Site_Id"    
              call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
                         lat_min, lat_max, lon_min, lon_max, & 
-                        num_stn, SNOOBS_stn,              &
+                        num_stn, SNDOBS_stn,              &
                         Lat_stn, Lon_stn, MYRANK) 
 
             if ((p_tRank==0) .and. print_deb) then
@@ -281,13 +239,13 @@ CONTAINS
             endif
             if ((p_tRank==0) .and. (p_tN==2) .and. print_deb) then
                     PRINT*, "Stn SND from rank: ", MYRANK
-                    PRINT*, SNOOBS_stn
+                    PRINT*, SNDOBS_stn
                     PRINT*, "Lat at Stn from rank: ", MYRANK
                     PRINT*, Lat_stn
                     PRINT*, "Lon at Stn from rank: ", MYRANK
                     PRINT*, Lon_stn
             endif
-            if (myrank==0) PRINT*,'Finished reading station data'
+            if (myrank==0) PRINT*,'snowDA: Finished reading station data'
 
        endif
 
@@ -295,7 +253,7 @@ CONTAINS
 
 ! 3b. Read remotely sensed snow cover, and convert to  snow depth or SWE. 
 
-       if (assim_sncov) then
+       if (assim_snowdepth_ims) then
             ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/IMS/"
             ims_inp_file = TRIM(IMS_SNOWCOVER_PATH)//"/IMS.SNCOV."// &
                                        TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"                      !
@@ -309,17 +267,23 @@ CONTAINS
                     PRINT*, "SNCOV from rank: ", MYRANK
                     PRINT*, SNCOV_IMS
             endif 
-            if (myrank==PRINTRANK) PRINT*,'Finished reading SNCOV, converting to snow depth' 
 
-            call CalcSWEFromSnowCover(SNCOV_IMS, VETFCS, LENSFC, SNO_IMS_at_Grid, SNUP_Array)
+           ! SNUP array will be used later, to test whether SCF > 100%
+            call CalcSWEFromSnowCover(SNCOV_IMS, VETFCS, LENSFC, SWE_IMS_at_Grid, SNUP_Array)
 
-            if (.not. assim_SWE)  SNO_IMS_at_Grid = SNO_IMS_at_Grid/SNODENS_DIST ! convert SWE to SND
-            
+            SND_IMS_at_Grid = SWE_IMS_at_Grid/SNODENS_Grid
+
             if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then
                     PRINT*, "SNCOV obs at each grid cell from rank: ", MYRANK
-                    PRINT*, SNO_IMS_at_Grid
+                    PRINT*, SND_IMS_at_Grid
             endif
-            if (myrank==PRINTRANK) PRINT*,'Finished converting SNCOV observations'
+
+            ! QC: ims -remove if fail elevation check
+            !         -remove if model and IMS have snow cover
+
+            where (OROG >  ims_max_ele) SND_IMS_at_Grid=nodata_val
+            where ( (SWEFCS >= SNUP_Array)  .and. ( SNCOV_IMS > 0.99) ) SND_IMS_at_Grid=nodata_val
+            if (myrank==PRINTRANK) PRINT*,'snowDA: Finished  reading and converting SNCOV observations'
         
         endif ! read_IMS 
 
@@ -333,66 +297,34 @@ CONTAINS
 ! 4b. get H(x) for station obs
         ! Get model states at obs points
         if (num_stn > 0) then ! skip if not reading in station data / no obs were available
-            ALLOCATE(SNOFCS_at_stn(num_stn))
+            ALLOCATE(SNDFCS_at_stn(num_stn))
+            ALLOCATE(SNDANL_at_stn(num_stn))
             ALLOCATE(OROGFCS_at_stn(num_stn)) 
             ALLOCATE(index_back_atObs(num_stn)) 
+            ALLOCATE(array_index_back_atObs(2,num_stn)) 
             ALLOCATE(OmB_innov_at_stn(num_stn)) 
-             ! using PERCENT_OBS_WITHHELD % of stn locations for evaluation
-            num_Eval = floor(0.01 * PERCENT_OBS_WITHHELD * num_stn)  
-            if (num_Eval > 0) then 
-                ALLOCATE(index_back_atEval(num_Eval)) 
-                ALLOCATE(Obs_atEvalPts(num_Eval)) 
-                ALLOCATE(SNOFCS_atEvalPts(num_Eval)) 
-                ALLOCATE(Lat_atEvalPts(num_Eval))
-                ALLOCATE(Lon_atEvalPts(num_Eval)) 
-                ALLOCATE(innov_atEvalPts(num_Eval))
-                ALLOCATE(SNOANL_atEvalPts(num_Eval))    
-                if(p_tRank == 0) then 
-                        PRINT*, "Tile ", p_tN+1, " ", num_Eval, ' points for evaluation excluded from DA'       
-                endif  
-            endif 
 
-    ! CSD todo: separate out eval call and obs operator call. model info (SNOOBS_stn shouldn't be in the obs operator)
-    !           for JEDI, probably also want to add snow depth derived from snow cover here.
+            ! QC: if nearest grid cell is not land, delte observation
             Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, & 
                                 RLA, RLO, OROG, Lat_stn, Lon_stn,   &
-                                LENSFC, num_stn, num_Eval, bkgst_srch_rad, SNOFCS, SNOOBS_stn,  &
-                                SNOFCS_at_stn, OROGFCS_at_stn, index_back_atObs, index_back_atEval, &
-                                Obs_atEvalPts, SNOFCS_atEvalPts, Lat_atEvalPts, Lon_atEvalPts)
-            if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then 
-                    PRINT*, "Background Indices at eval points"
-                    PRINT*, index_back_atEval       
-                    PRINT*, "Obs at Eval Points" 
-                    PRINT*, Obs_atEvalPts   
-                    PRINT*, "Forecast at Eval Points"
-                    PRINT*, SNOFCS_atEvalPts                             
-                    PRINT*, "Lat at Eval Points"
-                    PRINT*, Lat_atEvalPts
-                    PRINT*, "Lon at Eval Points"
-                    PRINT*, Lon_atEvalPts
-            endif
+                                LENSFC, num_stn, bkgst_srch_rad, SNDFCS, LANDMASK,  &
+                                SNDFCS_at_stn, OROGFCS_at_stn, index_back_atObs )  
 
-            OmB_innov_at_stn = SNOOBS_stn - SNOFCS_at_stn
+            OmB_innov_at_stn = SNDOBS_stn - SNDFCS_at_stn
 
             if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then
                     PRINT*, "station Lat range from rank: ", MYRANK, MINVAL(Lat_stn), " ", MAXVAL(Lat_stn)
                     PRINT*, "station Lon range from rank: ", MYRANK, MINVAL(Lon_stn), " ", MAXVAL(Lon_stn)
-                !     PRINT*, "Lat at Obs Points"
-                !     PRINT*, Lat_stn
-                !     PRINT*, "Lon at Obs Points"
-                !     PRINT*, Lon_stn
                     PRINT*, "Model elevation at station locations from rank: ", MYRANK
                     PRINT*, OROGFCS_at_stn
                     PRINT*, "Background Indices at obs points"
                     PRINT*, index_back_atObs
                     PRINT*, "Background ", stn_var, " at station locations from rank: ", MYRANK
-                    PRINT*, SNOFCS_at_stn  
-                !     PRINT*, "Obs at obs stns" 
-                !     PRINT*, SNOOBS_stn   
+                    PRINT*, SNDFCS_at_stn  
                     PRINT*, "O - B (innovation at obs points)"
                     PRINT*, OmB_innov_at_stn 
             endif
-            if (myrank==PRINTRANK) PRINT*,'Finished observation operator for station data'         
+            if (myrank==PRINTRANK) PRINT*,'snowDA: Finished observation operator for station data'         
         endif ! num_stn > 0
 
 !=============================================================================================
@@ -420,48 +352,37 @@ CONTAINS
 !=============================================================================================
  
         !obs_srch_rad = 250. ! radius of observation search
-        if (myrank==PRINTRANK) PRINT*,'Starting DA loop'
-        Do jndx = mp_start, mp_end     !LENSFC/2, LENSFC ! 442369, 442370   !
+        if (myrank==PRINTRANK) PRINT*,'snowDA: starting DA loop'
+        Do jndx = mp_start, mp_end   
+           ! QC: only update this grid cell if it is land.
+           if( LANDMASK(jndx) == 1 ) then 
                 num_loc_1 = 0
                 num_loc_2 = 0
                 assim_sncov_thisGridCell = .FALSE.
                 if (print_deb) print*, "proc ", myrank, " grid: ", jndx
                 if(num_stn>0) then 
-                ! CSD - speed up by skipping over all grid cells where model and IMS agree on no snow? 
                 ! currently: find station obs in radius, do gross error check, and limit to 50 obs
                 ! QC: gross error check is done in this call.
                         call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
                                         Lat_stn, Lon_stn,  num_stn, obs_srch_rad, max_num_nearStn,   &
-                                        stdev_back, stdev_obsv, obs_tolerance,                 &
-                                        SNOFCS_at_stn, SNOOBS_stn,                                              &
+                                        stdev_back_depth, stdev_obsv_stn, obs_tolerance,                 &
+                                        SNDFCS_at_stn, SNDOBS_stn,                                              &
                                         index_back_at_nearStn,  num_loc_1) !,      &LENSFC,
                         if (print_deb) print*, "number of stn sndpth obs ", num_loc_1
                 endif         
-                ! legacy code to collect IMS obs from surrounding grid cells.                 
-                ! if ( assim_sncov .AND. (IH_loc == ims_assm_hour) ) then
-                !         Call nearest_IMS_Locations(LENSFC, max_num_nearIMS, obs_srch_rad, &
-                !                         ims_max_ele, RLA(jndx), RLO(jndx), RLA, RLO, OROG, & 
-                !                         SNOFCS, SWEFCS, SNUP_Array, &
-                !                         SNO_IMS_at_Grid, num_loc_2, index_back_at_nearIMS)
-                !         if (num_loc_2 > 0) assim_sncov_thisGridCell = .TRUE.
-                !         if (print_deb) print*, " number of IMS obs: ", num_loc_2                                                                       
-                ! endif
-                ! QC: -for this grid cell, test IMS above ims_max_ele 
-                !     -if model and IMS have 100% snow cover, delete the IMS snow depth value
-                !     
-                if( assim_sncov .AND. (IH_loc == ims_assm_hour) .AND. &
-                    (.NOT. IEEE_IS_NAN(SNOFCS(jndx))) .AND. &
-                    (.NOT. IEEE_IS_NAN(SNO_IMS_at_Grid(jndx))) .AND. &
-                    (OROG(jndx) <= ims_max_ele) .AND. &
-                    ( .not.( (SWEFCS(jndx) >= SNUP_Array(jndx)) .AND. & 
-                       SNO_IMS_at_Grid(jndx) >= SNUP_Array(jndx)) ) ) then
+                if( assim_snowdepth_ims  .and.   &
+                    (.NOT. IEEE_IS_NAN(SNDFCS(jndx))) .AND. &
+                    (.NOT. IEEE_IS_NAN(SND_IMS_at_Grid(jndx))) .AND. &
+                    (  SND_IMS_at_Grid(jndx) > (nodata_val + nodata_tol) ) )  THEN  
+                    !(OROG(jndx) <= ims_max_ele) .AND. &
+                    !( .not.( (SWEFCS(jndx) >= SNUP_Array(jndx)) .AND. & 
+                    !   SWE_IMS_at_Grid(jndx) >= SNUP_Array(jndx)) ) ) then
                         num_loc_2 = 1 
                         assim_sncov_thisGridCell = .TRUE.                
                 endif
                 num_loc = num_loc_1 + num_loc_2                
-                ! if assim_sncov=false >> num_loc_1=num_loc
-                ! QC: only update this grid cell if it is land.
-                if((num_loc > 0) .and. ( LANDMASK(jndx) == 1 )) then 
+
+                if((num_loc > 0) ) then  ! skip DA if no obs, use background
                         ! get background states
                         Allocate(back_at_Obs(num_loc))
                         Allocate(obs_Array(num_loc))
@@ -470,28 +391,17 @@ CONTAINS
                         Allocate(orogfcs_Obs(num_loc))                        
                         if(num_loc_1 > 0) then
                                 Do zndx = 1, num_loc_1     
-                                        back_at_Obs(zndx) = SNOFCS_at_stn(index_back_at_nearStn(zndx))
-                                        obs_Array(zndx) = SNOOBS_stn(index_back_at_nearStn(zndx))
+                                        back_at_Obs(zndx) = SNDFCS_at_stn(index_back_at_nearStn(zndx))
+                                        obs_Array(zndx) = SNDOBS_stn(index_back_at_nearStn(zndx))
                                         Lat_Obs(zndx) = Lat_stn(index_back_at_nearStn(zndx))
                                         Lon_Obs(zndx) = Lon_stn(index_back_at_nearStn(zndx))
                                         orogfcs_Obs(zndx) = OROGFCS_at_stn(index_back_at_nearStn(zndx)) 
                                 End Do
                         End if
-                        !multi-IMS
-                        ! if(assim_sncov_thisGridCell) then                                
-                        !         Do zndx = 1, num_loc_2
-                        !                 back_at_Obs(num_loc_1+zndx) = SNOFCS(index_back_at_nearIMS(zndx))
-                        !                 obs_Array(num_loc_1+zndx) = SNO_IMS_at_Grid(index_back_at_nearIMS(zndx))
-                        !                 Lat_Obs(num_loc_1+zndx) = RLA(index_back_at_nearIMS(zndx))   !Lat_IMS_atGrid(jndx)
-                        !                 Lon_Obs(num_loc_1+zndx) = RLO(index_back_at_nearIMS(zndx))   !Lon_IMS_atGrid(jndx)
-                        !                 orogfcs_Obs(num_loc_1+zndx) = OROG(index_back_at_nearIMS(zndx))  !Ele_IMS(jndx)
-                        !         End Do
-                        ! endif
 
-                        ! Append IMS-derived snow depth to the obs array 
                         if(assim_sncov_thisGridCell) then                                
-                                back_at_Obs(num_loc) = SNOFCS(jndx)
-                                obs_Array(num_loc) = SNO_IMS_at_Grid(jndx)
+                                back_at_Obs(num_loc) = SNDFCS(jndx)
+                                obs_Array(num_loc) = SND_IMS_at_Grid(jndx)
                                 Lat_Obs(num_loc) = RLA(jndx)   
                                 Lon_Obs(num_loc) = RLO(jndx) 
                                 orogfcs_Obs(num_loc) = OROG(jndx)
@@ -501,21 +411,18 @@ CONTAINS
                         Allocate(b_cov_vect(num_loc))
                         Allocate(O_cov_mat(num_loc, num_loc))
                         Allocate(W_wght_vect(num_loc))   
-                        ! call compute_covariances_multiIMS(RLA(jndx), RLO(jndx), OROG(jndx), SNOFCS(jndx),    &
-                        !         Lat_Obs, Lon_Obs, orogfcs_Obs, num_loc, num_loc_1, num_loc_2,                &
-                        !         Stdev_back, Stdev_Obsv, Stdev_Obsv_ims,      &
-                        !         L_horz, h_ver,                                   &   !L_horz in Km, h_ver in m
-                        !         assim_sncov_thisGridCell, ims_correlated,            &
-                        !         B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
-                        call compute_covariances(RLA(jndx), RLO(jndx), OROG(jndx), SNOFCS(jndx),    &
+
+                        call compute_covariances(RLA(jndx), RLO(jndx), OROG(jndx), SNDFCS(jndx),    &
                                 Lat_Obs, Lon_Obs, orogfcs_Obs, num_loc,   &
-                                Stdev_back, Stdev_Obsv, Stdev_Obsv_ims,      &
+                                stdev_back_depth, stdev_obsv_stn, stdev_obsv_ims,      &
                                 L_horz, h_ver,                                   &   !L_horz in Km, h_ver in m
                                 assim_sncov_thisGridCell,                          &
                                 B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
+
                         Allocate(obs_Innov(num_loc))
+
                         call Snow_DA_OI(back_at_Obs, obs_Array, num_loc, W_wght_vect,            &
-                                SNOFCS(jndx), innov_at_Grid(jndx), SNOANL(jndx), obs_Innov)
+                                SNDFCS(jndx), SNDANL(jndx), obs_Innov)
                         if ((p_tN==4) .and. (p_tRank==0) .and. print_deb) then  !
                                 print*, "proc ", myrank, "loop ", jndx, "num depth obs ", num_loc_1, "total obs", num_loc
                                 PRINT*, " background at obs pts: "
@@ -526,23 +433,26 @@ CONTAINS
                                 PRINT*, obs_Innov
                                 PRINT*, "Weight vector: "
                                 PRINT*, W_wght_vect     
-                                print*, "innov: ", innov_at_Grid(jndx), "forec: ", SNOFCS(jndx), " anl: ", SNOANL(jndx)
+                                print*, "forec: ", SNDFCS(jndx), " anl: ", SNDANL(jndx)
                         endif           
                         !free mem
                         DEALLOCATE(back_at_Obs, obs_Array)
                         DEALLOCATE(Lat_Obs, Lon_Obs, orogfcs_Obs, obs_Innov)
                         DEALLOCATE(B_cov_mat, b_cov_vect, O_cov_mat, W_wght_vect)
-
+                else ! no obs were available,  keep background
+                        SNDANL(jndx) = SNDFCS(jndx) 
                 endif
                 if (allocated(index_back_at_nearStn))  Deallocate(index_back_at_nearStn) 
                 if (allocated(index_back_at_nearIMS))  Deallocate(index_back_at_nearIMS)                 
+           endif ! not a land cell
         End do
         CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
-        if (myrank==PRINTRANK) PRINT*, ' Finished DA loops'
+        if (myrank==PRINTRANK) PRINT*, 'snowDA: Finished DA loops'
         
 !=============================================================================================
 ! 7. Clean up, write outputs 
 !=============================================================================================
+
 
 ! collect results onto main tasks, if necessary
 
@@ -562,97 +472,79 @@ CONTAINS
         endif
         ! send analyses arrays to 'tile-level root' proc.               
         if (MYRANK > (NUM_TILES - 1) ) then
-                call MPI_SEND(SNOANL(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
+                call MPI_SEND(SNDANL(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
                                           MYRANK, MPI_COMM_WORLD, IERR) 
-                call MPI_SEND(innov_at_Grid(mp_start:mp_end), N_sA, mpiReal_size, p_tN,   &
-                                          MYRANK*100, MPI_COMM_WORLD, IERR)
         else    !if(p_tRank == 0) then  
                 Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
                         dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
                         send_proc = MYRANK +  pindex * NUM_TILES
-                        call MPI_RECV(SNOANL(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
+                        call MPI_RECV(SNDANL(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
                                           send_proc, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-                        call MPI_RECV(innov_at_Grid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiReal_size, send_proc,      &
-                                          send_proc*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
                 enddo
         endif
-        if (myrank==PRINTRANK) PRINT*,'Finished Data copy'
+        if (myrank==PRINTRANK) PRINT*,'snowDA: Finished Data copy'
 
         if (MYRANK > NUM_TILES - 1 ) goto 998   ! if(p_tRank /= 0 ) goto 998
 
-! fill in SWE and SND arrays       
+         
         ! avoid -ve anl
-        Where(SNOANL < 0.) SNOANL = 0.
+        Where( (SNDANL < 0.) .and. (SNDANL>(nodata_val+nodata_tol)) ) SNDANL = 0.
         if (print_deb) then
-                PRINT*, "Innovation SWE/snwd from rank: ", MYRANK
-            PRINT*, innov_at_Grid       
             PRINT*, "Analysis SWE/ snwd  from rank: ", MYRANK
-            PRINT*, SNOANL
-        endif
-        ! d = swe/sndi
-
-        ! this is for writing outputs at observation and evaluation points
-        ! SWE, SND will be updated seperately within sfcsub (using new snow density 
-        ! instead of mean for new snow).
-        if (assim_SWE)  then 
-                SWEANL = SNOANL 
-                WHERE (LANDMASK==1) SNDANL = SNOANL / SNODENS_DIST
-        else
-                WHERE (LANDMASK==1) SWEANL = SNOANL * SNODENS_DIST
-                SNDANL = SNOANL
+            PRINT*, SNDANL
         endif
 
-        ! !Compute updated snocov 
-        ! !Call update_snow_cover_fraction(LENSFC, SNOANL, VETFCS, anl_fSCA)
+! Calculate variables for diagnistic output file
+! (only SNDANL is passed back to calling program) 
 
-        ! copy values at eval points
-        innov_atEvalPts = IEEE_VALUE(innov_atEvalPts, IEEE_QUIET_NAN)
-        SNOANL_atEvalPts = IEEE_VALUE(SNOANL_atEvalPts, IEEE_QUIET_NAN)
-        !SNOANL_Cur_atEvalPts = IEEE_VALUE(SNOANL_Cur_atEvalPts, IEEE_QUIET_NAN)
-        Do jndx = 1, num_Eval
-                if ((index_back_atEval(jndx) > 0) .and. &
-                    (LANDMASK(jndx)  == 1 )) then 
-                        innov_atEvalPts(jndx) = innov_at_Grid(index_back_atEval(jndx))
-                        SNOANL_atEvalPts(jndx) = SNOANL(index_back_atEval(jndx))
-                        !SNOANL_Cur_atEvalPts(jndx) = SNOANL_Cur(index_back_atEval(jndx))
-                endif
-        End do
+! Grid variable, analysis SWE and SCF
+! note that in sfcsub, density in locations without current snow  is new snow density
+! SWE results will be slightly different
+        SWEANL = nodata_val
+        Where( LANDMASK==1 ) SWEANL  = SNDANL*SNODENS_Grid
+        
+        !call calculate_snow_cover_fraction(LENSFC, SWEANL, VETFCS, nodata_val, nodata_tol, SCFANL)
+
+! get index for station obs in original array 
+
+        do jndx = 1, num_stn 
+              array_index_back_atObs(1,jndx) =  index_back_atObs(jndx) / JDIM
+              array_index_back_atObs(2,jndx) =  mod(index_back_atObs(jndx), JDIM) 
+        enddo
+
+
+! station depth from analysis
+! get analysis at obs locations, to O-A
+        if (num_stn > 0 ) then
+                Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, &
+                            RLA, RLO, OROG, Lat_stn, Lon_stn,   &
+                            LENSFC, num_stn, bkgst_srch_rad, SNDANL, LANDMASK, & 
+                            SNDANL_at_stn, OROGFCS_at_stn, index_back_atObs )
+        endif
+
         ! write outputs 
         Write(rank_str, '(I1.1)') (MYRANK+1)
-        ! "/scratch2/BMC/gsienkf/Tseganeh.Gichamo/SnowObs/Analysis/"
         da_out_file = "./SNOANLOI.tile"//rank_str//".nc"  !
-        !                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"18_tile"//rank_str//".nc"  !  
+
         call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
-                              SWEFCS, SWEANL, SNDFCS, SNDANL, LANDMASK,&  !
-                              num_stn, Lat_stn, Lon_stn, SNOOBS_stn, SNOFCS_at_stn, OmB_innov_at_stn,  &                                
-                              innov_at_Grid, SNCOV_IMS, &
-                              num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-                              SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts) !, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
+                              SWEFCS, SWEANL, SNDFCS, SNDANL, LANDMASK,&  
+                              SNCOV_IMS, SND_IMS_at_Grid, & 
+                              num_stn, Lat_stn, Lon_stn, array_index_back_atObs, & 
+                              SNDOBS_stn, SNDFCS_at_stn, SNDANL_at_stn) 
 
 998 CONTINUE
-        ! clean up
-             if (allocated(SNOOBS_stn))      DEALLOCATE(SNOOBS_stn)
-             if (allocated(SNOFCS_at_stn))   DEALLOCATE(SNOFCS_at_stn)
-             if (allocated(OmB_innov_at_stn))   DEALLOCATE(OmB_innov_at_stn)
-             if (allocated(Lat_stn))         DEALLOCATE(Lat_stn) 
-             if (allocated(Lon_stn))         DEALLOCATE(Lon_stn) 
-             if (allocated(OROGFCS_at_stn))  DEALLOCATE(OROGFCS_at_stn) 
-             if (allocated(Obs_atEvalPts))   DEALLOCATE(Obs_atEvalPts)
-             if (allocated(SNOFCS_atEvalPts)) DEALLOCATE(SNOFCS_atEvalPts)
-             if (allocated(innov_atEvalPts))  DEALLOCATE(innov_atEvalPts)
-             if (allocated(SNOANL_atEvalPts)) DEALLOCATE(SNOANL_atEvalPts)
-             if (allocated(index_back_atObs)) DEALLOCATE(index_back_atObs)
-             if (allocated(Lat_atEvalPts))   DEALLOCATE(Lat_atEvalPts) 
-             if (allocated(Lon_atEvalPts))   DEALLOCATE(Lon_atEvalPts)
-        
-        Call UPDATEtime(IY_loc, IM_loc, ID_loc, IH_real, dT_Asssim)
-        IH_loc = INT(IH_real)    ! (for the obs. available currently) this should be 18
-        if (myrank==PRINTRANK) PRINT*,'Finished OI DA at datetime: ', y_str, m_str, d_str, h_str
-        
-    End do
-
+    ! clean up
+        if (allocated(SNDOBS_stn))      DEALLOCATE(SNDOBS_stn)
+        if (allocated(SNDFCS_at_stn))   DEALLOCATE(SNDFCS_at_stn)
+        if (allocated(SNDANL_at_stn))   DEALLOCATE(SNDANL_at_stn)
+        if (allocated(OmB_innov_at_stn))   DEALLOCATE(OmB_innov_at_stn)
+        if (allocated(Lat_stn))         DEALLOCATE(Lat_stn) 
+        if (allocated(Lon_stn))         DEALLOCATE(Lon_stn) 
+        if (allocated(OROGFCS_at_stn))  DEALLOCATE(OROGFCS_at_stn) 
+        if (allocated(index_back_atObs)) DEALLOCATE(index_back_atObs)
+        if (allocated(array_index_back_atObs)) DEALLOCATE(array_index_back_atObs)
 999 CONTINUE
-        PRINT*,'Finished OI DA ON RANK: ', MYRANK
+        PRINT*,'snowDA: Finished OI DA ON RANK: ', MYRANK
         CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
 
         !STOP
@@ -661,36 +553,9 @@ CONTAINS
 
  END subroutine Snow_Analysis_OI
 
-
- ! SWE threshold for 100% snow cover
- subroutine get_SWE_Threshold(VETFCS_in, SNUP)
-        
-        IMPLICIT NONE
-        !
-        Real, Intent(In)        :: VETFCS_in
-        Real, Intent(Out)       :: SNUP
-        
-        INTEGER            :: VETFCS
-        REAL               :: snupx(30)
-
-        !This is for the IGBP veg classification scheme.
-        ! SWE at which snow cover reaches 100%
-        snupx = (/0.080, 0.080, 0.080, 0.080, 0.080, 0.020,     &
-                0.020, 0.060, 0.040, 0.020, 0.010, 0.020,                       &
-                0.020, 0.020, 0.013, 0.013, 0.010, 0.020,                       &
-                0.020, 0.020, 0.000, 0.000, 0.000, 0.000,                       &
-                0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
-
-        VETFCS = INT(VETFCS_in)
-        If (VETFCS==0) VETFCS = 7  !vtype_tile[vtype_tile==0] = 7
-        
-        SNUP = snupx(VETFCS) * 1000.0 ! mm
-           
-        RETURN
-            
- END SUBROUTINE get_SWE_Threshold
-
- Subroutine update_snow_cover_fraction(LENSFC, SNOANL, VETFCS_in, anl_fSCA)
+ Subroutine calculate_snow_cover_fraction(LENSFC, SWE, VETFCS_in, nodata_val, nodata_tol, fSCA)
+! Routine to calculate snow cover fraction from SWE. Taken from Noah model code 
+! Assuming -ve SWE = nodata (sloppy) 
 
         IMPLICIT NONE
         !
@@ -699,8 +564,9 @@ CONTAINS
         integer, parameter :: dp = kind(1.d0)
 
         INTEGER, intent(in) :: LENSFC
-        REAL, intent(In)   :: SNOANL(LENSFC), VETFCS_in(LENSFC)
-        REAL, intent(Out)   ::  anl_fSCA(LENSFC)
+        REAL, intent(In)   :: SWE(LENSFC), VETFCS_in(LENSFC)
+        REAL, intent(in)   :: nodata_val, nodata_tol
+        REAL, intent(Out)   ::  fSCA(LENSFC)
         INTEGER                :: VETFCS(LENSFC)
 
         REAL               :: snupx(30), SNEQV(LENSFC), SNUP, SALP, RSNOW
@@ -713,7 +579,7 @@ CONTAINS
                         0.020, 0.020, 0.000, 0.000, 0.000, 0.000,                       &
                         0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
 
-        SNEQV = 0.001 * SNOANL   ! units mm->m
+        SNEQV = 0.001 * SWE   ! units mm->m
         SALP = -4.0
         
         VETFCS = INT(VETFCS_in)
@@ -726,28 +592,29 @@ CONTAINS
                         Stop
                 endif
 
-                IF (SNEQV(indx) .LT. SNUP) THEN
+                IF (SNEQV(indx) <  (nodata_val+nodata_tol) ) THEN 
+                          fSCA(indx) = nodata_val
+                ELSEIF (SNEQV(indx) < 0.00001) THEN 
+                          fSCA(indx) = 0.0
+                ELSEIF (SNEQV(indx) .LT. SNUP) THEN
                         RSNOW = SNEQV(indx)/SNUP
-                        anl_fSCA(indx) = 1. - (EXP(SALP*RSNOW) - RSNOW*EXP(SALP))
+                        fSCA(indx) = 1. - (EXP(SALP*RSNOW) - RSNOW*EXP(SALP))
                 ELSE
-                        anl_fSCA(indx) = 1.0
+                        fSCA(indx) = 1.0
                 ENDIF
-
-                if (SNEQV(indx) < 0.00001)  anl_fSCA(indx) = 0.0        
 
         End do
         
         RETURN
 
- End Subroutine update_snow_cover_fraction
+ End Subroutine calculate_snow_cover_fraction
 
  ! the following code based on write_data() in read_write_data.f90
  Subroutine Write_DA_Outputs(output_file, idim, jdim, lensfc, myrank,   &
                                  snoforc, snoanl, snwdforc, snwdanal, landmask,  &
-                                 num_stn, Lat_atObs, Lon_atObs, OBS_stn, FCS_at_stn, OmB_innov_at_stn,  & 
-                                 inovatgrid, SNCOV_IMS, &
-                                 num_Eval, Lat_atEvalPts, Lon_atEvalPts, Obs_atEvalPts, & 
-            SNOFCS_atEvalPts, innov_atEvalPts, SNOANL_atEvalPts) !, SNOANL_Cur_atEvalPts)  !, anl_fSCA) !updated snocov
+                                 SNCOV_IMS, SND_IMS_at_Grid, &
+                                 num_stn, Lat_atObs, Lon_atObs, index_stn,OBS_stn, FCS_at_stn, ANL_at_stn )  
+!**
         !------------------------------------------------------------------
         ! Write DA ouputs: 
         ! forecast SWE
@@ -761,23 +628,20 @@ CONTAINS
         integer, intent(in)         :: idim, jdim, lensfc, num_stn
         real, intent(in)            :: snoforc(lensfc), snoanl(lensfc), snwdforc(lensfc), snwdanal(lensfc)
         integer, intent(in)         :: landmask(lensfc)
-        Real, intent(in)            :: OBS_stn(num_stn), FCS_at_stn(num_stn), OmB_innov_at_stn(num_stn)
+        integer, intent(in)         :: index_stn(2,num_stn)
+        Real, intent(in)            :: OBS_stn(num_stn), FCS_at_stn(num_stn), ANL_at_stn(num_stn)
         Real, intent(in)            :: Lat_atObs(num_stn), Lon_atObs(num_stn)
-        Real, intent(in)            :: inovatgrid(lensfc), SNCOV_IMS(lensfc)  !, anl_fSCA(lensfc)
-        integer, intent(in)         :: num_Eval
-        real, intent(in)    :: Lat_atEvalPts(num_Eval), Lon_atEvalPts(num_Eval), Obs_atEvalPts(num_Eval)
-        real, intent(in)    :: SNOFCS_atEvalPts(num_Eval), SNOANL_atEvalPts(num_Eval) 
-        real, intent(in)    :: innov_atEvalPts(num_Eval)  !, SNOANL_Cur_atEvalPts(num_Eval)
+        Real, intent(in)            :: SND_IMS_at_Grid(lensfc), SNCOV_IMS(lensfc)  !, anl_fSCA(lensfc)
 
         integer                     :: fsize=65536, inital=0
         integer                     :: header_buffer_val = 16384
         integer                     :: dims_3d(3), dims_strt(3), dims_end(3)
         integer                     :: error, i, ncid
-        integer                     :: dim_x, dim_y, dim_time, dim_eval, dim_stn
+        integer                     :: dim_x, dim_y, dim_time, dim_stn
         integer                     :: id_x, id_y, id_time
-        integer       :: id_swe_forc, id_swe, id_snwdf, id_snwd, id_innov, id_imscov   !, id_anlscov
-        integer       :: id_latstn, id_lonstn, id_obsstn, id_forcstn, id_innovstn, id_landmask
-        integer       :: id_lateval, id_loneval, id_obseval, id_forceval, id_anleval, id_innoveval   !, id_cur_anleval, , id_anlscov
+        integer       :: id_swe_forc, id_swe, id_snwdf, id_snwd, id_imssno, id_imscov  
+        integer       :: id_latstn, id_lonstn, id_obsstn, id_forcstn, id_analstn, id_landmask
+        integer       :: id_iindex, id_jindex
         
         integer                     :: myrank
 
@@ -804,11 +668,6 @@ CONTAINS
         ! obs points
         error = nf90_def_dim(ncid, 'obs_points', num_stn, dim_stn)
         call netcdf_err(error, 'DEFINING obs_points' )
-        ! eval obs points
-        if (num_Eval>0) then
-                error = nf90_def_dim(ncid, 'eval_points', num_Eval, dim_eval)
-                call netcdf_err(error, 'DEFINING eval_points' )
-        endif
 
         !--- define fields
         error = nf90_def_var(ncid, 'xaxis_1', NF90_FLOAT, dim_x, id_x)
@@ -877,12 +736,12 @@ CONTAINS
         error = nf90_put_att(ncid, id_snwd, "units", "mm")
         call netcdf_err(error, 'DEFINING SND Analysis UNITS' )
 
-        error = nf90_def_var(ncid, 'DA_Innovation', NF90_DOUBLE, dims_3d, id_innov)
-        call netcdf_err(error, 'DEFINING DA_Innovation' )
-        error = nf90_put_att(ncid, id_innov, "long_name", "DA Innovation at model grid")
-        call netcdf_err(error, 'DEFINING DA_Innovation LONG NAME' )
-        error = nf90_put_att(ncid, id_innov, "units", "mm")
-        call netcdf_err(error, 'DEFINING DA_Innovation UNITS' )
+        error = nf90_def_var(ncid, 'imsSND', NF90_DOUBLE, dims_3d, id_imssno)
+        call netcdf_err(error, 'DEFINING imsSND' )
+        error = nf90_put_att(ncid, id_imssno, "long_name", "IMS derived snow depth") 
+        call netcdf_err(error, 'DEFINING imsSND LONG NAME' )
+        error = nf90_put_att(ncid, id_imssno, "units", "mm")
+        call netcdf_err(error, 'DEFINING imsSND UNITS' )
 
         error = nf90_def_var(ncid, 'imsfSCA', NF90_DOUBLE, dims_3d, id_imscov)
         call netcdf_err(error, 'DEFINING imsfSCA' )
@@ -906,6 +765,20 @@ CONTAINS
         error = nf90_put_att(ncid, id_lonstn, "units", "deg")
         call netcdf_err(error, 'DEFINING longitude@MetaData UNITS' )
         
+        error = nf90_def_var(ncid, 'IDIM_index@MetaData', NF90_INT, dim_stn, id_iindex)
+        call netcdf_err(error, 'DEFINING IDIM_index@MetaData' )
+        error = nf90_put_att(ncid, id_iindex, "long_name", "IDIM index at Observation Points")
+        call netcdf_err(error, 'DEFINING IDIM_indexe@MetaData LONG NAME' )
+        error = nf90_put_att(ncid, id_iindex, "units", "-")
+        call netcdf_err(error, 'DEFINING IDIM_index@MetaData UNITS' )
+
+        error = nf90_def_var(ncid, 'JDIM_index@MetaData', NF90_INT, dim_stn, id_jindex)
+        call netcdf_err(error, 'DEFINING JDIM_index@MetaData' )
+        error = nf90_put_att(ncid, id_jindex, "long_name", "JDIM index at Observation Points")
+        call netcdf_err(error, 'DEFINING JDIM_indexe@MetaData LONG NAME' )
+        error = nf90_put_att(ncid, id_jindex, "units", "-")
+        call netcdf_err(error, 'DEFINING JDIM_index@MetaData UNITS' )
+
         error = nf90_def_var(ncid, 'snwdph@ObsValue', NF90_DOUBLE, dim_stn, id_obsstn)
         call netcdf_err(error, 'DEFINING snwdph@ObsValue' )
         error = nf90_put_att(ncid, id_obsstn, "long_name", "Observed at Observation Points")
@@ -920,78 +793,12 @@ CONTAINS
         error = nf90_put_att(ncid, id_forcstn, "units", "mm")
         call netcdf_err(error, 'DEFINING snwdph@hofx UNITS' )
 
-        error = nf90_def_var(ncid, 'snwdph@omb', NF90_DOUBLE, dim_stn, id_innovstn)
-        call netcdf_err(error, 'DEFINING snwdph@omb' )
-        error = nf90_put_att(ncid, id_innovstn, "long_name", "Innovation(O-B) at Observation Points")
-        call netcdf_err(error, 'DEFINING snwdph@omb LONG NAME' )
-        error = nf90_put_att(ncid, id_innovstn, "units", "mm")
-        call netcdf_err(error, 'DEFINING snwdph@omb UNITS' )
-
-        ! error = nf90_def_var(ncid, 'anlfSCA', NF90_DOUBLE, dims_3d, id_anlscov)
-        ! call netcdf_err(error, 'DEFINING anlfSCA' )
-        ! error = nf90_put_att(ncid, id_anlscov, "long_name", "Analysis fractional Snow Covered Area")
-        ! call netcdf_err(error, 'DEFINING anlfSCA LONG NAME' )
-        ! error = nf90_put_att(ncid, id_anlscov, "units", "-")
-        ! call netcdf_err(error, 'DEFINING anlfSCA UNITS' )
-
-        ! eval points
-        if (num_Eval>0) then 
-                error = nf90_def_var(ncid, 'LatEvalPoints', NF90_DOUBLE, dim_eval, id_lateval)
-                call netcdf_err(error, 'DEFINING LatEvalPoints' )
-                error = nf90_put_att(ncid, id_lateval, "long_name", "Latitude at Evaluation Points")
-                call netcdf_err(error, 'DEFINING LatEvalPoints LONG NAME' )
-                error = nf90_put_att(ncid, id_lateval, "units", "deg")
-                call netcdf_err(error, 'DEFINING LatEvalPoints UNITS' )
-
-                error = nf90_def_var(ncid, 'LonEvalPoints', NF90_DOUBLE, dim_eval, id_loneval)
-                call netcdf_err(error, 'DEFINING LonEvalPoints' )
-                error = nf90_put_att(ncid, id_loneval, "long_name", "Longitude at Evaluation Points")
-                call netcdf_err(error, 'DEFINING LonEvalPoints LONG NAME' )
-                error = nf90_put_att(ncid, id_loneval, "units", "deg")
-                call netcdf_err(error, 'DEFINING LonEvalPoints UNITS' )
-                
-                error = nf90_def_var(ncid, 'Obs_atEvalPts', NF90_DOUBLE, dim_eval, id_obseval)
-                call netcdf_err(error, 'DEFINING Obs_atEvalPts' )
-                error = nf90_put_att(ncid, id_obseval, "long_name", "Observed at Evaluation Points")
-                call netcdf_err(error, 'DEFINING Obs_atEvalPts LONG NAME' )
-                error = nf90_put_att(ncid, id_obseval, "units", "mm")
-                call netcdf_err(error, 'DEFINING Obs_atEvalPts UNITS' )
-                
-                error = nf90_def_var(ncid, 'SNOFCS_atEvalPts', NF90_DOUBLE, dim_eval, id_forceval)
-                call netcdf_err(error, 'DEFINING SNOFCS_atEvalPts' )
-                error = nf90_put_att(ncid, id_forceval, "long_name", "Forecast at Evaluation Points")
-                call netcdf_err(error, 'DEFINING SNOFCS_atEvalPts LONG NAME' )
-                error = nf90_put_att(ncid, id_forceval, "units", "mm")
-                call netcdf_err(error, 'DEFINING SNOFCS_atEvalPts UNITS' )
-
-                error = nf90_def_var(ncid, 'SNOANL_atEvalPts', NF90_DOUBLE, dim_eval, id_anleval)
-                call netcdf_err(error, 'DEFINING SNOANL_atEvalPts' )
-                error = nf90_put_att(ncid, id_anleval, "long_name", "Analysis at Evaluation Points")
-                call netcdf_err(error, 'DEFINING SNOANL_atEvalPts LONG NAME' )
-                error = nf90_put_att(ncid, id_anleval, "units", "mm")
-                call netcdf_err(error, 'DEFINING SNOANL_atEvalPts UNITS' )
-
-                ! error = nf90_def_var(ncid, 'SNOANL_Cur_atEvalPts', NF90_DOUBLE, dim_eval, id_cur_anleval)
-                ! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts' )
-                ! error = nf90_put_att(ncid, id_cur_anleval, "long_name", "Current Analysis at Evaluation Points")
-                ! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts LONG NAME' )
-                ! error = nf90_put_att(ncid, id_cur_anleval, "units", "mm")
-                ! call netcdf_err(error, 'DEFINING SNOANL_Cur_atEvalPts UNITS' )
-                
-                error = nf90_def_var(ncid, 'Innov_atEvalPts', NF90_DOUBLE, dim_eval, id_innoveval)
-                call netcdf_err(error, 'DEFINING Innov_atEvalPts' )
-                error = nf90_put_att(ncid, id_innoveval, "long_name", "Innovation at Evaluation Points")
-                call netcdf_err(error, 'DEFINING Innov_atEvalPts LONG NAME' )
-                error = nf90_put_att(ncid, id_innoveval, "units", "mm")
-                call netcdf_err(error, 'DEFINING Innov_atEvalPts UNITS' )
-
-                ! error = nf90_def_var(ncid, 'anlfSCA', NF90_DOUBLE, dims_3d, id_anlscov)
-                ! call netcdf_err(error, 'DEFINING anlfSCA' )
-                ! error = nf90_put_att(ncid, id_anlscov, "long_name", "Analysis fractional Snow Covered Area")
-                ! call netcdf_err(error, 'DEFINING anlfSCA LONG NAME' )
-                ! error = nf90_put_att(ncid, id_anlscov, "units", "-")
-                ! call netcdf_err(error, 'DEFINING anlfSCA UNITS' )
-        endif
+        error = nf90_def_var(ncid, 'snwdph@anal', NF90_DOUBLE, dim_stn, id_analstn)
+        call netcdf_err(error, 'DEFINING snwdph@anal' )
+        error = nf90_put_att(ncid, id_analstn, "long_name", "Analysis at Observation Points") 
+        call netcdf_err(error, 'DEFINING snwdph@anal LONG NAME' )
+        error = nf90_put_att(ncid, id_analstn, "units", "mm")
+        call netcdf_err(error, 'DEFINING snwdph@anal UNITS' )
 
         error = nf90_enddef(ncid, header_buffer_val,4,0,4)
         call netcdf_err(error, 'DEFINING HEADER' )
@@ -1039,17 +846,13 @@ CONTAINS
         error = nf90_put_var( ncid, id_snwd, dum2d, dims_strt, dims_end)
         call netcdf_err(error, 'WRITING SND analysis RECORD' )
 
-        dum2d = reshape(inovatgrid, (/idim,jdim/))
-        error = nf90_put_var( ncid, id_innov, dum2d, dims_strt, dims_end)
-        call netcdf_err(error, 'WRITING innovation RECORD' )
-
         dum2d = reshape(SNCOV_IMS, (/idim,jdim/))
         error = nf90_put_var( ncid, id_imscov, dum2d, dims_strt, dims_end)
         call netcdf_err(error, 'WRITING imsfSCA RECORD' )
 
-        ! dum2d = reshape(anl_fSCA, (/idim,jdim/))
-        ! error = nf90_put_var( ncid, id_anlscov, dum2d, dims_strt, dims_end)
-        ! call netcdf_err(error, 'WRITING anlfSCA RECORD' )
+         dum2d = reshape(SND_IMS_at_Grid, (/idim,jdim/))
+         error = nf90_put_var( ncid, id_imssno, dum2d, dims_strt, dims_end)
+         call netcdf_err(error, 'WRITING imsSND RECORD' )
         
         ! obs points (obs, hofx, omb) 
         error = nf90_put_var( ncid, id_latstn, Lat_atObs)
@@ -1058,36 +861,20 @@ CONTAINS
         error = nf90_put_var( ncid, id_lonstn, Lon_atObs)
         call netcdf_err(error, 'WRITING Lon_atObsPts RECORD' )
 
+        error = nf90_put_var( ncid, id_iindex, index_stn(1,:))
+        call netcdf_err(error, 'WRITING idim index RECORD' )
+
+        error = nf90_put_var( ncid, id_jindex, index_stn(2,:))
+        call netcdf_err(error, 'WRITING jdim index RECORD' )
+
         error = nf90_put_var( ncid, id_obsstn, OBS_stn)
         call netcdf_err(error, 'WRITING Obs_atObsPts RECORD' )
 
         error = nf90_put_var( ncid, id_forcstn, FCS_at_stn)
-        call netcdf_err(error, 'WRITING SNOFCS_atObsPts RECORD' )
+        call netcdf_err(error, 'WRITING SNDFCS_atObsPts RECORD' )
 
-        error = nf90_put_var( ncid, id_innovstn, OmB_innov_at_stn)
-        call netcdf_err(error, 'WRITING innov_atObsPts RECORD' )
-
-        ! eval points
-        if (num_Eval>0) then 
-                error = nf90_put_var( ncid, id_lateval, Lat_atEvalPts)
-                call netcdf_err(error, 'WRITING Lat_atEvalPts RECORD' )
-
-                error = nf90_put_var( ncid, id_loneval, Lon_atEvalPts)
-                call netcdf_err(error, 'WRITING Lon_atEvalPts RECORD' )
-
-                error = nf90_put_var( ncid, id_obseval, Obs_atEvalPts)
-                call netcdf_err(error, 'WRITING Obs_atEvalPts RECORD' )
-
-                error = nf90_put_var( ncid, id_forceval, SNOFCS_atEvalPts)
-                call netcdf_err(error, 'WRITING SNOFCS_atEvalPts RECORD' )
-
-                error = nf90_put_var( ncid, id_anleval, SNOANL_atEvalPts)
-                call netcdf_err(error, 'WRITING SNOANL_atEvalPts RECORD' )
-                ! error = nf90_put_var( ncid, id_cur_anleval, SNOANL_Cur_atEvalPts)
-                ! call netcdf_err(error, 'WRITING SNOANL_Cur_atEvalPts RECORD' )
-                error = nf90_put_var( ncid, id_innoveval, innov_atEvalPts)
-                call netcdf_err(error, 'WRITING innov_atEvalPts RECORD' )
-        endif
+        error = nf90_put_var( ncid, id_analstn, ANL_at_stn)
+        call netcdf_err(error, 'WRITING anal_atObsPts RECORD' )
 
         deallocate(x_data, y_data)
         deallocate(dum2d)
@@ -1095,51 +882,6 @@ CONTAINS
         error = nf90_close(ncid)
     
  End subroutine Write_DA_Outputs
-
- SUBROUTINE Observation_Read_atEval(ghcnd_inp_file, &   !dim_name,                      &
-                    NDIM, Lat_GHCND, Lon_GHCND, MYRANK)
-        
-        IMPLICIT NONE
-    
-        include 'mpif.h'
-        !Open netCDF for a snotel and read the SWE, SnowDepth,..., Lat, Lon, at a given datetime
-        !ToDO: Can you use variable length char array ?
-        CHARACTER(LEN=*), Intent(In)      :: ghcnd_inp_file     !, dim_name
-        INTEGER                :: ERROR, NCID
-        INTEGER                :: MYRANK
-        INTEGER                :: ID_DIM, ID_VAR
-        INTEGER, Intent(Out)   :: NDIM
-    
-        REAL, ALLOCATABLE, Intent(Out)     :: Lat_GHCND(:), Lon_GHCND(:) !, Ele_GHCND(:)
-    
-        ERROR=NF90_OPEN(TRIM(ghcnd_inp_file),NF90_NOWRITE,NCID)
-        CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(ghcnd_inp_file) )
-    
-        ERROR=NF90_INQ_DIMID(NCID, 'eval_points', ID_DIM)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Dimension' )
-    
-        ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NDIM)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Size of Dimension' )
-    
-        ALLOCATE(Lat_GHCND(NDIM))
-        ALLOCATE(Lon_GHCND(NDIM))
-        !ALLOCATE(Ele_GHCND(NDIM))
-    
-        ERROR=NF90_INQ_VARID(NCID, 'LatEvalPoints', ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Lat ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, Lat_GHCND)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Lat RECORD' )
-    
-        ERROR=NF90_INQ_VARID(NCID, 'LonEvalPoints', ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Lon ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, Lon_GHCND)
-        CALL NETCDF_ERR(ERROR, 'ERROR READING Lon RECORD' )
-    
-        ERROR = NF90_CLOSE(NCID)
-                  
-        RETURN
-        
- End SUBROUTINE Observation_Read_atEval
 
  SUBROUTINE Find_Nearest_GridIndices_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, &
                                             num_src, num_tar, RLA_cg, RLO_cg, RLA, RLO, index_ens_atGrid)
@@ -1233,288 +975,8 @@ CONTAINS
         
  END SUBROUTINE Find_Nearest_GridIndices_Parallel
      
- SUBROUTINE read_ensemble_forcing(MYRANK, NUM_TILES, TILE_NUM, ens_size, LENSFC, IDIM_In, JDIM_In, & 
-                                        index_ens_atGrid,    &
-                                    ens_inp_path, y_str, m_str, d_str, h_str, hprev_str, &
-                                    assim_SWE, save_Ens, SNOFCS_Inp_Ens, da_out_file)    ! assim_SWE, 
-    
-        IMPLICIT NONE
-
-        include "mpif.h"
-
-        INTEGER, INTENT(IN)       :: MYRANK, NUM_TILES, ens_size, LENSFC        
-        CHARACTER(LEN=5), INTENT(In)      :: TILE_NUM
-        INTEGER, Intent(In)               :: IDIM_In, JDIM_In
-        Integer, Intent(In)                :: index_ens_atGrid(LENSFC)
-        !REAL, INTENT(In)                  :: RLA_cg(LENSFC/4), RLO_cg(LENSFC/4), RLA(LENSFC), RLO(LENSFC)
-        CHARACTER(LEN=*), Intent(In)      :: ens_inp_path, y_str, m_str, d_str, h_str, hprev_str        
-        LOGICAL, Intent(In)                       :: assim_SWE, save_Ens
-        REAL, INTENT(OUT)         :: SNOFCS_Inp_Ens(ens_size, LENSFC) !, SNOCOV_Ens(ens_size, LENSFC)  !VEGFCS(LENSFC), 
-        !REAL, INTENT(OUT)        :: FMM(LENSFC), FHH(LENSFC), SRFLAG(LENSFC)
-        CHARACTER(LEN=*)          :: da_out_file
-
-        CHARACTER(LEN=50)         :: FNBGSI
-        CHARACTER(LEN=3)          :: ens_str
-        CHARACTER(LEN=250)        :: ens_inp_path_full
-
-        INTEGER                   :: ERROR, NCID
-        INTEGER                   :: IDIM, JDIM, ID_DIM, ens_indx       
-        INTEGER                   :: i, ix, jy, dim_x, dim_y, dim_ens, id_x, id_y, id_ens, id_forc
-        INTEGER                   :: ID_VAR
-
-        REAL(KIND=8)              :: DUMMY(IDIM_In/2, JDIM_In/2), DUMMY2D(IDIM_In, JDIM_In)
-        REAL(KIND=8)              :: SNOFCS_Inp_Ens_In(LENSFC/4)
-        real(kind=4), allocatable   :: x_data(:), y_data(:), ens_data(:)
-        integer                     :: fsize=65536, inital=0
-        integer                     :: header_buffer_val = 16384
-        integer                     :: dims_3d(3), dims_strt(3), dims_end(3)
-        
-        Do ens_indx = 1, ens_size
-                WRITE(ens_str, '(I3.3)') (ens_indx)
-                ens_inp_path_full = TRIM(ens_inp_path)//"mem"//ens_str//"/RESTART/"// &
-                                                TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//"." // &
-                                                TRIM(h_str)// "0000.sfc_data."//TILE_NUM//".nc"
-
-                ERROR=NF90_OPEN(TRIM(ens_inp_path_full),NF90_NOWRITE,NCID)
-                CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(ens_inp_path_full) )
-
-                ERROR=NF90_INQ_DIMID(NCID, 'xaxis_1', ID_DIM)
-                CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-                ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=IDIM)
-                CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-                ERROR=NF90_INQ_DIMID(NCID, 'yaxis_1', ID_DIM)
-                CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-                ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=JDIM)
-                CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-
-                IF ((IDIM*JDIM) /= (LENSFC/4)) THEN
-                PRINT*,'FATAL ERROR: DIMENSIONS WRONG.'
-                CALL MPI_ABORT(MPI_COMM_WORLD, 88)
-                ENDIF
-                if(assim_SWE) then
-                        ERROR=NF90_INQ_VARID(NCID, "sheleg", ID_VAR)
-                        CALL NETCDF_ERR(ERROR, 'READING sheleg ID' )
-                        ERROR=NF90_GET_VAR(NCID, ID_VAR, DUMMY)
-                        CALL NETCDF_ERR(ERROR, 'READING sheleg' )
-                else
-                        ERROR=NF90_INQ_VARID(NCID, "snwdph", ID_VAR)
-                        CALL NETCDF_ERR(ERROR, 'READING snwdph ID' )
-                        ERROR=NF90_GET_VAR(NCID, ID_VAR, DUMMY)
-                        CALL NETCDF_ERR(ERROR, 'READING snwdph' )
-                endif
-                ! Do ix = 1, IDIM_In
-                !       Do jy = 1, JDIM_In
-                !               DUMMY2D(ix, jy) = DUMMY((ix+1)/2, (jy+1)/2)
-                !       End do
-                ! End do
-                ! SNOFCS_Inp_Ens(ens_indx, :) = RESHAPE(DUMMY2D, (/LENSFC/))
-                SNOFCS_Inp_Ens_In = RESHAPE(DUMMY, (/(LENSFC/4)/))
-                Do ix = 1, LENSFC
-                        SNOFCS_Inp_Ens(ens_indx, ix) = SNOFCS_Inp_Ens_In(index_ens_atGrid(ix))
-                End do          
-                ! ERROR=NF90_INQ_VARID(NCID, "sncovr", ID_VAR)
-                ! CALL NETCDF_ERR(ERROR, 'READING sncovr ID' )
-                ! ERROR=NF90_GET_VAR(NCID, ID_VAR, DUMMY)
-                ! CALL NETCDF_ERR(ERROR, 'READING sncovr' )
-                ! Do ix = 1, IDIM_In
-                !       Do jy = 1, JDIM_In
-                !               DUMMY2D(ix, jy) = DUMMY((ix+1)/2, (jy+1)/2)
-                !       End do
-                ! End do
-                ! SNOCOV_Ens(ens_indx, :) = RESHAPE(DUMMY2D, (/LENSFC/))
-
-                ERROR = NF90_CLOSE(NCID)
-        End do
-        
-        If (save_Ens .and. (Myrank < NUM_TILES)) then
-        
-                print*,"Process ", myrank, "writing ens snow forc data to: ",trim(da_out_file)
-                
-                !--- create the file
-                error = NF90_CREATE(da_out_file, IOR(NF90_NETCDF4,NF90_CLASSIC_MODEL), &
-                                                                        ncid, initialsize=inital, chunksize=fsize)
-                call netcdf_err(error, 'CREATING FILE='//trim(da_out_file) )
-
-                !--- define dimensions
-                error = nf90_def_dim(ncid, 'xaxis_1', IDIM_In, dim_x)
-                call netcdf_err(error, 'DEFINING XAXIS DIMENSION' )
-                error = nf90_def_dim(ncid, 'yaxis_1', JDIM_In, dim_y)
-                call netcdf_err(error, 'DEFINING YAXIS DIMENSION' )
-                error = nf90_def_dim(ncid, 'Ens_mem', ens_size, dim_ens)
-                call netcdf_err(error, 'DEFINING ENS DIMENSION' )
-
-                !--- define fields
-                error = nf90_def_var(ncid, 'xaxis_1', NF90_FLOAT, dim_x, id_x)
-                call netcdf_err(error, 'DEFINING XAXIS_1 FIELD' )
-                error = nf90_put_att(ncid, id_x, "long_name", "xaxis_1")
-                call netcdf_err(error, 'DEFINING XAXIS_1 LONG NAME' )
-                error = nf90_put_att(ncid, id_x, "units", "none")
-                call netcdf_err(error, 'DEFINING XAXIS_1 UNITS' )
-                error = nf90_put_att(ncid, id_x, "cartesian_axis", "X")
-                call netcdf_err(error, 'WRITING XAXIS_1 FIELD' )
-
-                error = nf90_def_var(ncid, 'yaxis_1', NF90_FLOAT, dim_y, id_y)
-                call netcdf_err(error, 'DEFINING YAXIS_1 FIELD' )
-                error = nf90_put_att(ncid, id_y, "long_name", "yaxis_1")
-                call netcdf_err(error, 'DEFINING YAXIS_1 LONG NAME' )
-                error = nf90_put_att(ncid, id_y, "units", "none")
-                call netcdf_err(error, 'DEFINING YAXIS_1 UNITS' )
-                error = nf90_put_att(ncid, id_y, "cartesian_axis", "Y")
-                call netcdf_err(error, 'WRITING YAXIS_1 FIELD' )
-
-                error = nf90_def_var(ncid, 'Ens_mem', NF90_FLOAT, dim_ens, id_ens)
-                call netcdf_err(error, 'DEFINING ENS FIELD' )
-                error = nf90_put_att(ncid, id_ens, "long_name", "Ensemble members")
-                call netcdf_err(error, 'DEFINING ENS LONG NAME' )
-                error = nf90_put_att(ncid, id_ens, "units", "-")
-                call netcdf_err(error, 'DEFINING ENS UNITS' )
-                error = nf90_put_att(ncid, id_ens, "cartesian_axis", "ENS")
-                call netcdf_err(error, 'WRITING ENS FIELD' )
-
-                dims_3d(1) = dim_x
-                dims_3d(2) = dim_y
-                dims_3d(3) = dim_ens
-
-                error = nf90_def_var(ncid, 'SND_Forecast', NF90_DOUBLE, dims_3d, id_forc)
-                call netcdf_err(error, 'DEFINING SND_Forecast' )
-                error = nf90_put_att(ncid, id_forc, "long_name", "Forecast Snow Depth")
-                call netcdf_err(error, 'DEFINING SND Forecast LONG NAME' )
-                error = nf90_put_att(ncid, id_forc, "units", "mm")
-                call netcdf_err(error, 'DEFINING SND Forecast UNITS' )
-
-                error = nf90_enddef(ncid, header_buffer_val,4,0,4)
-                call netcdf_err(error, 'DEFINING HEADER' )
-
-                allocate(x_data(IDIM_In))
-                do i = 1, IDIM_In
-                x_data(i) = float(i)
-                enddo
-                allocate(y_data(JDIM_In))
-                do i = 1, JDIM_In
-                y_data(i) = float(i)
-                enddo
-                allocate(ens_data(ens_size))
-                do i = 1, ens_size
-                        ens_data(i) = float(i)
-                enddo
-
-                error = nf90_put_var( ncid, id_x, x_data)
-                call netcdf_err(error, 'WRITING XAXIS RECORD' )
-                error = nf90_put_var( ncid, id_y, y_data)
-                call netcdf_err(error, 'WRITING YAXIS RECORD' )
-                error = nf90_put_var( ncid, id_ens, ens_data)
-                call netcdf_err(error, 'WRITING Ensmem RECORD' )
-
-                Do ens_indx = 1, ens_size
-                        dims_strt(1:2) = 1
-                        dims_strt(3) = ens_indx
-                        dims_end(1) = IDIM_In
-                        dims_end(2) = JDIM_In
-                        dims_end(3) = 1
-                        
-                        DUMMY2D = reshape(SNOFCS_Inp_Ens(ens_indx, :), (/IDIM_In,JDIM_In/))
-                        error = nf90_put_var( ncid, id_forc, DUMMY2D, dims_strt, dims_end)
-                        call netcdf_err(error, 'WRITING SWE Forecast RECORD' )
-                End do
-                error = nf90_close(ncid)
-                deallocate(x_data, y_data, ens_data)
-        Endif
-
-        !deallocate(DUMMY, DUMMY2D)
-        
- END SUBROUTINE read_ensemble_forcing
-    
- SUBROUTINE READ_Forecast_Data(MYRANK, LENSFC, veg_type_landice, SWEFCS, SNDFCS, VETFCS, LANDMASK)
-    
-        IMPLICIT NONE
-
-        include "mpif.h"
-
-        INTEGER, INTENT(IN)       :: MYRANK, LENSFC, veg_type_landice
-        REAL, INTENT(OUT)         :: SWEFCS(LENSFC),SNDFCS(LENSFC),VETFCS(LENSFC)
-        INTEGER, INTENT(OUT)      :: LANDMASK(LENSFC) 
-
-        CHARACTER(LEN=50)         :: FNBGSI
-        CHARACTER(LEN=3)          :: RANKCH
-
-        INTEGER                   :: ERROR, NCID
-        INTEGER                   :: IDIM, JDIM, ID_DIM
-        INTEGER                   :: ID_VAR, i
-
-        REAL(KIND=8), ALLOCATABLE :: DUMMY(:,:)
-        REAL                      :: SLMASK(LENSFC)
-
-        !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
-
-        WRITE(RANKCH, '(I3.3)') (MYRANK+1)
-
-        FNBGSI = "./fnbgsi." // RANKCH
-        if (print_deb) PRINT*, "READ INPUT SFC DATA FROM: "//TRIM(FNBGSI)
-
-        ERROR=NF90_OPEN(TRIM(FNBGSI),NF90_NOWRITE,NCID)
-        CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(FNBGSI) )
-
-        ERROR=NF90_INQ_DIMID(NCID, 'xaxis_1', ID_DIM)
-        CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-        ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=IDIM)
-        CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-
-        ERROR=NF90_INQ_DIMID(NCID, 'yaxis_1', ID_DIM)
-        CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-        ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=JDIM)
-        CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-
-        IF ((IDIM*JDIM) /= LENSFC) THEN
-        PRINT*,'FATAL ERROR: DIMENSIONS WRONG.'
-        CALL MPI_ABORT(MPI_COMM_WORLD, 88)
-        ENDIF
-
-        ALLOCATE(DUMMY(IDIM,JDIM))
-
-        ERROR=NF90_INQ_VARID(NCID, "sheleg", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING sheleg ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING sheleg' )
-        SWEFCS = RESHAPE(DUMMY, (/LENSFC/)) 
-
-        ERROR=NF90_INQ_VARID(NCID, "snwdph", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING snwdph ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING snwdph' )
-        SNDFCS = RESHAPE(DUMMY, (/LENSFC/))
-
-        ERROR=NF90_INQ_VARID(NCID, "vtype", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING vtype ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING vtype' )
-        VETFCS = RESHAPE(DUMMY, (/LENSFC/))    
-
-        ERROR=NF90_INQ_VARID(NCID, "slmsk", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING slmsk ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING slmsk' )
-        SLMASK = RESHAPE(DUMMY, (/LENSFC/))    
-
-        do i = 1, LENSFC 
-           ! if land, but not land ice, set mask to 1.
-           if ( (NINT(SLMASK(i)) == 1 ) .and.   & 
-                ( NINT(VETFCS(i)) /=  veg_type_landice  )) then 
-                LANDMASK(i) = 1 
-           else 
-                LANDMASK(i) = 0
-           endif 
-        enddo
-
-        ! slmsk is 0 - ocean, 1 - land, 2 -seaice 
-        ! convert to integer  0 not land or glacier, 1 - non-glacier covered land
-        
-        DEALLOCATE(DUMMY)
-
-        ERROR = NF90_CLOSE(NCID)
-    
- END SUBROUTINE READ_Forecast_Data
-
- SUBROUTINE READ_Forecast_Data_atPath(forc_inp_path, veg_type_landice, LENSFC, SWEFCS, SNDFCS, VETFCS, LANDMASK) !VEGFCS, !SRFLAG)
+ SUBROUTINE READ_Forecast_Data_atPath(forc_inp_path, veg_type_landice, LENSFC, SWEFCS, SNDFCS, VETFCS, LANDMASK)  
+!**
     
         IMPLICIT NONE
 
@@ -1522,9 +984,8 @@ CONTAINS
         
         CHARACTER(LEN=*), Intent(In)      :: forc_inp_path
         INTEGER, INTENT(IN)               :: LENSFC, veg_type_landice
-        REAL, INTENT(OUT)                 :: SWEFCS(LENSFC), SNDFCS(LENSFC), VETFCS(LENSFC)  !VEGFCS(LENSFC), 
+        REAL, INTENT(OUT)                 :: SWEFCS(LENSFC), SNDFCS(LENSFC), VETFCS(LENSFC) 
         INTEGER, INTENT(OUT)              :: LANDMASK(LENSFC) 
-        !REAL, INTENT(OUT)        :: FMM(LENSFC), FHH(LENSFC), SRFLAG(LENSFC)
 
         CHARACTER(LEN=50)         :: FNBGSI
         CHARACTER(LEN=3)          :: RANKCH
@@ -1537,14 +998,6 @@ CONTAINS
         REAL                      :: SLMASK(LENSFC)
         LOGICAL                   :: file_exists
 
-        !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
-        ! WRITE(RANKCH, '(I3.3)') (MYRANK+1)
-        ! FNBGSI = "./fnbgsi." // RANKCH
-        ! if (print_deb) PRINT*, "READ INPUT SFC DATA FROM: "//TRIM(FNBGSI)
-
-        !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
-        ! if (print_deb) PRINT*, "READ INPUT SFC DATA FROM: "//TRIM(forc_inp_path)
-        
         INQUIRE(FILE=trim(forc_inp_path), EXIST=file_exists)
 
         if (.not. file_exists) then 
@@ -1552,12 +1005,9 @@ CONTAINS
                         trim(forc_inp_path) , ' exiting'
                 call MPI_ABORT(MPI_COMM_WORLD, 10) ! CSD - add proper error trapping?
         endif
-                
 
         ERROR=NF90_OPEN(TRIM(forc_inp_path), NF90_NOWRITE,NCID)
         CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(forc_inp_path) )
-        ! ERROR=NF90_OPEN(TRIM(FNBGSI),NF90_NOWRITE,NCID)
-        ! CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(FNBGSI) )
 
         ERROR=NF90_INQ_DIMID(NCID, 'xaxis_1', ID_DIM)
         CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
@@ -1618,157 +1068,12 @@ CONTAINS
     
  END SUBROUTINE READ_Forecast_Data_atPath
 
- SUBROUTINE READ_Analysis_Data(anl_inp_path, MYRANK, LENSFC, SWEFCS, SNDFCS) 
-    
-        IMPLICIT NONE
-
-        include "mpif.h"
-        
-        CHARACTER(LEN=*), Intent(In)      :: anl_inp_path
-        INTEGER, INTENT(IN)       :: MYRANK, LENSFC
-        REAL, INTENT(OUT)         :: SWEFCS(LENSFC), SNDFCS(LENSFC)
-
-        INTEGER                   :: ERROR, NCID
-        INTEGER                   :: IDIM, JDIM, ID_DIM
-        INTEGER                   :: ID_VAR
-
-        REAL(KIND=8), ALLOCATABLE :: DUMMY(:,:)
-
-        !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
-        if (print_deb) PRINT*, "READ INPUT SFC DATA FROM: "//TRIM(anl_inp_path)
-
-        ERROR=NF90_OPEN(TRIM(anl_inp_path),NF90_NOWRITE,NCID)
-        CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(anl_inp_path) )
-
-        ERROR=NF90_INQ_DIMID(NCID, 'xaxis_1', ID_DIM)
-        CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-        ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=IDIM)
-        CALL NETCDF_ERR(ERROR, 'READING xaxis_1' )
-
-        ERROR=NF90_INQ_DIMID(NCID, 'yaxis_1', ID_DIM)
-        CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-        ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=JDIM)
-        CALL NETCDF_ERR(ERROR, 'READING yaxis_1' )
-
-        IF ((IDIM*JDIM) /= LENSFC) THEN
-        PRINT*,'FATAL ERROR: DIMENSIONS WRONG.'
-        CALL MPI_ABORT(MPI_COMM_WORLD, 88)
-        ENDIF
-
-        ALLOCATE(DUMMY(IDIM, JDIM))
-
-        ERROR=NF90_INQ_VARID(NCID, "sheleg", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING sheleg ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING sheleg' )
-        SWEFCS = RESHAPE(DUMMY, (/LENSFC/))
-
-        ERROR=NF90_INQ_VARID(NCID, "snwdph", ID_VAR)
-        CALL NETCDF_ERR(ERROR, 'READING snwdph ID' )
-        ERROR=NF90_GET_VAR(NCID, ID_VAR, dummy)
-        CALL NETCDF_ERR(ERROR, 'READING snwdph' )
-        SNDFCS = RESHAPE(DUMMY, (/LENSFC/)) 
- 
-        
-        DEALLOCATE(DUMMY)
-
-        ERROR = NF90_CLOSE(NCID)
-    
- END SUBROUTINE READ_Analysis_Data
-    
- SUBROUTINE READ_LAT_LON_CoarseRes(inp_path,RLA,RLO,IDIM,JDIM,IJDIM)
-    
-     IMPLICIT NONE
-    
-     include "mpif.h"
-    
-     INTEGER, INTENT(IN)    :: IDIM, JDIM, IJDIM
-         
-         CHARACTER(LEN=*), Intent(In)      :: inp_path
-    
-     REAL, INTENT(OUT)      :: RLA(IJDIM),RLO(IJDIM)
-    
-     INTEGER                :: ERROR, NCID
-     INTEGER                :: I, II, J, JJ
-     INTEGER                :: ID_DIM, ID_VAR, NX, NY
-    
-     REAL, ALLOCATABLE      :: DUMMY(:,:), GEOLAT(:,:), GEOLON(:,:)
-    
-     !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
-    
-     if (print_deb) then
-        PRINT*, "READ FV3 GRID INFO FROM: "//TRIM(inp_path)
-     endif
-    
-     ERROR=NF90_OPEN(TRIM(inp_path),NF90_NOWRITE,NCID)
-     CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(inp_path) )
-    
-     ERROR=NF90_INQ_DIMID(NCID, 'nx', ID_DIM)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING NX ID' )
-    
-     ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NX)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING NX' )
-    
-     ERROR=NF90_INQ_DIMID(NCID, 'ny', ID_DIM)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING NY ID' )
-    
-     ERROR=NF90_INQUIRE_DIMENSION(NCID,ID_DIM,LEN=NY)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING NY' )
-    
-     IF ((NX/2) /= IDIM .OR. (NY/2) /= JDIM) THEN
-       PRINT*,'FATAL ERROR: DIMENSIONS IN FILE: ',(NX/2),(NY/2)
-       PRINT*,'DO NOT MATCH GRID DIMENSIONS: ',IDIM,JDIM
-       CALL MPI_ABORT(MPI_COMM_WORLD, 130)
-     ENDIF
-    
-     ALLOCATE(GEOLON(NX+1,NY+1))
-     ALLOCATE(GEOLAT(NX+1,NY+1))
-    
-     ERROR=NF90_INQ_VARID(NCID, 'x', ID_VAR)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING X ID' )
-     ERROR=NF90_GET_VAR(NCID, ID_VAR, GEOLON)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING X RECORD' )
-    
-     ERROR=NF90_INQ_VARID(NCID, 'y', ID_VAR)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING Y ID' )
-     ERROR=NF90_GET_VAR(NCID, ID_VAR, GEOLAT)
-     CALL NETCDF_ERR(ERROR, 'ERROR READING Y RECORD' )
-    
-     ALLOCATE(DUMMY(IDIM,JDIM))
-    
-     DO J = 1, JDIM
-       DO I = 1, IDIM
-         II = 2*I
-         JJ = 2*J
-         DUMMY(I,J) = GEOLON(II,JJ)
-       ENDDO
-     ENDDO
-    
-     RLO = RESHAPE(DUMMY, (/IJDIM/))
-    
-     DEALLOCATE(GEOLON)
-    
-     DO J = 1, JDIM
-       DO I = 1, IDIM
-         II = 2*I
-         JJ = 2*J
-         DUMMY(I,J) = GEOLAT(II,JJ)
-       ENDDO
-     ENDDO
-    
-     RLA = RESHAPE(DUMMY, (/IJDIM/))
-    
-     DEALLOCATE(GEOLAT, DUMMY)
-    
-     ERROR = NF90_CLOSE(NCID)
-    
- END SUBROUTINE READ_LAT_LON_CoarseRes
-
- SUBROUTINE READ_LAT_LON_OROG_atRank(MYRANK, RLA,RLO,OROG,TILE_NUM,IDIM,JDIM,IJDIM) !OROG_UF,
+ SUBROUTINE READ_LAT_LON_OROG_atRank(MYRANK, RLA,RLO,OROG,TILE_NUM,IDIM,JDIM,IJDIM) 
+!** 
     
     !--------------------------------------------------------------
-    ! READ LATITUDE, LONGITUDE, FILTERED OROGRAPHY, AND
-    ! UNFILTERED OROGRAPHY FOR THE CUBED-SPHERE TILE FROM
+    ! READ LATITUDE, LONGITUDE, FILTERED OROGRAPHY,
+    ! ON THE CUBED-SPHERE TILE FROM
     ! THE "GRID" FILE.
     !--------------------------------------------------------------
     
@@ -1781,7 +1086,7 @@ CONTAINS
      CHARACTER(LEN=5), INTENT(OUT) :: TILE_NUM
     
      REAL, INTENT(OUT)      :: RLA(IJDIM),RLO(IJDIM)
-     REAL, INTENT(OUT)      :: OROG(IJDIM)   !,OROG_UF(IJDIM)
+     REAL, INTENT(OUT)      :: OROG(IJDIM)  
     
      CHARACTER(LEN=50)      :: FNOROG, FNGRID
      CHARACTER(LEN=3)       :: RANKCH
@@ -1792,8 +1097,7 @@ CONTAINS
     
      REAL, ALLOCATABLE         :: DUMMY(:,:), GEOLAT(:,:), GEOLON(:,:)
      REAL(KIND=4), ALLOCATABLE :: DUMMY4(:,:)
-    
-     !CALL MPI_COMM_RANK(MPI_COMM_WORLD, MYRANK, ERROR)
+     LOGICAL                   :: file_exists
     
      WRITE(RANKCH, '(I3.3)') (MYRANK+1)
     
@@ -1801,6 +1105,14 @@ CONTAINS
     
      if (print_deb) then
         PRINT*, "READ FV3 GRID INFO FROM: "//TRIM(FNGRID)
+     endif
+
+    INQUIRE(FILE=trim(FNGRID), EXIST=file_exists)
+
+    if (.not. file_exists) then 
+            print *, 'READ_LAT_LON_OROG_atRank error, grid file does not exist', &   
+                    trim(FNGRID) , ' exiting'
+            call MPI_ABORT(MPI_COMM_WORLD, 10)
      endif
     
      ERROR=NF90_OPEN(TRIM(FNGRID),NF90_NOWRITE,NCID)
@@ -1873,6 +1185,14 @@ CONTAINS
      FNOROG = "./fnorog." // RANKCH
     
      if (print_deb) PRINT*, "READ FV3 OROG INFO FROM: "//TRIM(FNOROG)
+
+     INQUIRE(FILE=trim(FNOROG), EXIST=file_exists)
+
+     if (.not. file_exists) then 
+            print *, 'READ_LAT_LON_OROG_atRank error orogfile does not exist', &   
+                    trim(FNGRID) , ' exiting'
+            call MPI_ABORT(MPI_COMM_WORLD, 10)
+     endif
     
      ERROR=NF90_OPEN(TRIM(FNOROG),NF90_NOWRITE,NCID_OROG)
      CALL NETCDF_ERR(ERROR, 'OPENING FILE: '//TRIM(FNOROG) )
@@ -1896,65 +1216,6 @@ CONTAINS
      ERROR = NF90_CLOSE(NCID_OROG)
     
  END SUBROUTINE READ_LAT_LON_OROG_atRank
-
- ! 10.14.20: subroutine copied from UEBFortran at
- ! https://github.com/dtarb/UEBFortran/blob/master/Model/snowxv.f90
- !                 Update time for each time step
- SUBROUTINE UPDATEtime(YEAR,MONTH,DAY,HOUR,DT)
-        
-        IMPLICIT NONE
-
-        INTEGER   :: YEAR, MONTH, DAY, DMON(12), DM, I       ! 30/03/2004 ITB 
-        !INTEGER   :: LYEAR  ! 30/03/2004 ITB  
-        Real      :: hour, dt  ! DGT Dec 10, 2004.  Fixing ITB errors 
- 
-        DATA (DMON(I),I=1,12)/31,28,31,30,31,30,31,31,30,31,30,31/
-        HOUR=HOUR+DT
-        DM=DMON(MONTH)
-!  check for leap years 
-        if(month .eq. 2)dm=lyear(year)
-10   continue
-        IF(HOUR.GE.24.0) THEN
-          HOUR=HOUR-24.0
-          DAY=DAY+1
-          go to 10
-        ENDIF
-20   continue
-        IF(DAY.GT.DM) THEN
-          DAY=day - dm
-          MONTH=MONTH+1
-          IF(MONTH.GT.12) THEN
-                MONTH=1
-                YEAR=YEAR+1
-                  DM=DMON(MONTH)
-                if(month .eq. 2)dm=lyear(year)
-                endif
-                go to 20
-        ENDIF
-        RETURN
-
- END SUBROUTINE UPDATEtime
-
- ! 10.14.20: subroutine copied from UEBFortran at
- ! https://github.com/dtarb/UEBFortran/blob/master/Model/snowxv.f90
-!    function to return number of days in February checking for leap years
- function lyear(year) result(Alyear)  
-        
-        IMPLICIT NONE
-
-        Integer  :: year, Alyear
-        IF(MOD(YEAR,4).GT.0 .or. &
-                (mod(year,100) .eq.0 .and. mod(year,400) .ne. 0)) THEN
-        ! Leap years are every 4 years 
-        ! - except for years that are multiples of centuries (e.g. 1800, 1900)
-        ! - except again that when the century is divisible by 4 (e.g. 1600, 2000)
-        !   then it is a leap year 
-                Alyear=28
-        ELSE
-                Alyear=29
-        ENDIF
-          
- end function lyear
 
  END MODULE M_Snow_Analysis
  

@@ -103,7 +103,7 @@
 ! SNOW_OI_TYPE controls the OI of snow obs. 
 ! 0  - no OI of snow
 ! 1  - OI applied to snow depth 
-! 2  - OI appplied to SWE  
+! 2  - OI appplied to SWE   (not coded) 
 ! Note:SFCSUB coded for different snow obs. types, but OI calling program is not
 
 ! 
@@ -112,7 +112,7 @@
  REAL                :: horz_len_scale, ver_len_scale, obs_tolerance 
  REAL                :: obs_srch_rad, bkgst_srch_rad, ims_max_ele, dT_Asssim
  Integer             :: max_num_nearStn, max_num_nearIMS, num_subgrd_ims_cels, num_assim_steps
- LOGICAL             :: assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated
+ LOGICAL             :: assim_SnowPack_obs, assim_SnowCov_obs
  CHARACTER(LEN=500)  :: GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, &
                         IMS_INDEXES_PATH, SFC_FORECAST_PREFIX
  CHARACTER(len=4)    :: stn_var 
@@ -126,8 +126,8 @@
  NAMELIST/NAMSNO/ SNOW_OI_TYPE, PERCENT_OBS_WITHHELD,    &
                   horz_len_scale, ver_len_scale, obs_tolerance, & 
                   obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &
-                  ims_max_ele, num_subgrd_ims_cels, num_assim_steps, dT_Asssim, &
-                  assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
+                  ims_max_ele, num_subgrd_ims_cels, & 
+                  assim_SnowPack_obs, assim_SnowCov_obs, stn_var, &
                   GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX, & 
                   STANDALONE_SNOWOI
 !
@@ -147,11 +147,8 @@
  DATA max_num_nearIMS/5/
  DATA ims_max_ele/1500./
  DATA num_subgrd_ims_cels/30/
- DATA num_assim_steps/1/  ! For multiple time steps of assimilation
- DATA dT_Asssim/24.0/     ! hrs. For multiple time steps of assimilation
- DATA assim_SnowPack_obs/.true./
- DATA assim_SnowCov_obs/.true./
- DATA ims_correlated/.true./
+ DATA assim_SnowPack_obs/.false./
+ DATA assim_SnowCov_obs/.false./
  DATA stn_var/'SND'/
  DATA GHCND_SNOWDEPTH_PATH/'        '/ 
  DATA IMS_SNOWCOVER_PATH/'        '/
@@ -203,19 +200,18 @@
  LENSFC = IDIM*JDIM ! TOTAL NUMBER OF POINTS FOR THE CUBED-SPHERE TILE
 
  ! do snow OI, if requested
- IF (SNOW_OI_TYPE .gt. 0) then
+ IF (SNOW_OI_TYPE .eq. 1) then
     PRINT*,"snowDA: calling OI on RANK" , MYRANK
     ALLOCATE(SNOANL(LENSFC))
     CALL MPI_BARRIER(MPI_COMM_WORLD, IERR)
     ! s_assm_hour =18
     ! if (IH == s_assm_hour) then
-    Call Snow_Analysis_OI(SNOW_OI_TYPE, NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
-                          num_assim_steps, dT_Asssim,  & 
+    Call Snow_Analysis_OI(NUM_TILES, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, &
                           LENSFC, IVEGSRC, PERCENT_OBS_WITHHELD, &
                           horz_len_scale, ver_len_scale, obs_tolerance, &
-                          obs_srch_rad, bkgst_srch_rad, max_num_nearStn, max_num_nearIMS, &
+                          obs_srch_rad, bkgst_srch_rad, max_num_nearStn, &
                           ims_max_ele, num_subgrd_ims_cels, &
-                          assim_SnowPack_obs, assim_SnowCov_obs, ims_correlated, stn_var, &
+                          assim_SnowPack_obs, assim_SnowCov_obs, stn_var, &
                           GHCND_SNOWDEPTH_PATH, IMS_SNOWCOVER_PATH, IMS_INDEXES_PATH, SFC_FORECAST_PREFIX, &
                           SNOANL)
     ! Call map_outputs_toObs(MAX_TASKS, MYRANK, NPROCS, IDIM, JDIM, IY, IM, ID, IH, & 
