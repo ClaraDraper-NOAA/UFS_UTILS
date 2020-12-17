@@ -252,9 +252,9 @@ MODULE M_DA
     end function inv
 
     subroutine nearest_Observations_Locations(RLA_jndx, RLO_jndx,    &
-        Lat_Obs, Lon_Obs, num_Obs, max_distance, max_num_loc,                           &
-        Stdev_back, Stdev_Obs_depth, obs_tolerance,                 &
-        SNOFCS_atObs, OBS_atOBs,                                 &
+        Lat_Obs, Lon_Obs, num_Obs, max_distance, max_num_loc,        &
+        Stdev_back, Stdev_Obs_depth,                                 &
+        SNOFCS_atObs, OBS_atOBs,                                     &
         Loc_backSt_atObs,  num_loc) 
 !**
         IMPLICIT NONE
@@ -263,7 +263,7 @@ MODULE M_DA
         Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)
         Integer, Intent(In) :: num_Obs, max_num_loc
         Real, Intent(In)        :: max_distance   ! radius_of_influence
-        Real, Intent(In)        :: Stdev_back, Stdev_Obs_depth, obs_tolerance
+        Real, Intent(In)        :: Stdev_back, Stdev_Obs_depth
         Real, Intent(In)    :: SNOFCS_atObs(num_Obs)
         Real, Intent(In)    :: OBS_atOBs(num_Obs)
         Integer, Allocatable, Intent(Out)    :: Loc_backSt_atObs(:)
@@ -278,7 +278,6 @@ MODULE M_DA
         Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
         Real, Parameter         :: earth_rad = 6371.
-        Real                :: innov_criteria
         Real, Allocatable   :: dist_atObs(:)
         Real, Allocatable   :: dist_atObs_dummy(:)
         Integer, Allocatable   :: Loc_backSt_atObs_dummy(:)
@@ -310,14 +309,12 @@ MODULE M_DA
         Where (haversinArr < 0) haversinArr = 0.
         distArr = 2 * earth_rad * asin(sqrt(haversinArr))
         
-        innov_criteria =  obs_tolerance * sqrt(Stdev_back**2 + Stdev_Obs_depth**2)
         ! 4.15.20: can you do the following without loop?       
         num_loc_counter = 0
         Do indx = 1, num_Obs    
             if((distArr(indx) < max_distance) .AND. &
                (.NOT. IEEE_IS_NAN(SNOFCS_atObs(indx))) .AND. & 
-               (.NOT. IEEE_IS_NAN(OBS_atOBs(indx))) .AND. &  
-               (abs(OBS_atOBs(indx) - SNOFCS_atObs(indx)) < innov_criteria) ) then                
+               (.NOT. IEEE_IS_NAN(OBS_atOBs(indx))) ) then 
                 num_loc_counter = num_loc_counter + 1
             endif
         End do
@@ -328,8 +325,7 @@ MODULE M_DA
         Do indx = 1, num_Obs    
             if((distArr(indx) < max_distance) .AND. &
                (.NOT. IEEE_IS_NAN(SNOFCS_atObs(indx))) .AND. &
-               (.NOT. IEEE_IS_NAN(OBS_atOBs(indx))) .AND. & 
-               (abs(OBS_atOBs(indx) - SNOFCS_atObs(indx)) < innov_criteria) ) then 
+               (.NOT. IEEE_IS_NAN(OBS_atOBs(indx))) ) then 
                 Loc_backSt_atObs_dummy(jndx) = indx
                 dist_atObs_dummy(jndx) = distArr(indx)
                 jndx = jndx  + 1
@@ -570,9 +566,9 @@ MODULE M_DA
      End SUBROUTINE Observation_Read_IMS_Full
     
      SUBROUTINE Observation_Operator_Parallel(Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, & 
-                            RLA, RLO, OROG, Lat_Obs, Lon_Obs,               &
+                            RLA, RLO, OROG, Lat_Obs, Lon_Obs, stn_obs,              &
                             LENSFC, num_Obs, max_distance, SNOFCS_back, LANDMASK,  &
-                            SNOFCS_atObs, OROGFCS_atObs, index_back_atObs )
+                            gross_thold,SNOFCS_atObs, OROGFCS_atObs, index_back_atObs )
 ! Draper, edited to make generic
 
         IMPLICIT NONE
@@ -582,7 +578,7 @@ MODULE M_DA
     
         Real, Intent(In)        :: RLA(LENSFC), RLO(LENSFC), OROG(LENSFC)
         integer, intent(in)     ::  LANDMASK(LENSFC)
-        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs)  ! don't want to alter these
+        Real, Intent(In)        :: Lat_Obs(num_Obs), Lon_Obs(num_Obs), stn_obs(num_obs)  ! don't want to alter these
         INTEGER             :: Myrank, MAX_TASKS, p_tN, p_tRank, Np_til, LENSFC, num_Obs 
         Real                :: max_distance   ! extent from center of grid cell to search for obs
         Real, Intent(In)        :: SNOFCS_back(LENSFC)
@@ -595,6 +591,7 @@ MODULE M_DA
         INTEGER :: indx, jndx, jzndx, zndx, min_indx
         Real    :: distArr(LENSFC), haversinArr(LENSFC)
         Real    :: d_latArr(LENSFC), d_lonArr(LENSFC)
+        real    :: gross_thold
         Real(16), Parameter :: PI_16 = 4 * atan (1.0_16)        
         Real(16), Parameter :: pi_div_180 = PI_16/180.0
         Real, Parameter         :: earth_rad = 6371.
@@ -644,14 +641,13 @@ MODULE M_DA
             !distArr = (Lat_Obs(indx) - RLA)**2 + (Lon_Obs_2(indx) - RLO)**2 
             min_indx = MINLOC(distArr, dim = 1)  !, MASK=ieee_is_nan(distArr))
     
-            if(distArr(min_indx) < max_distance) then
-                if (LANDMASK(min_indx) == 1) then  ! if nearest cell is no land, obs value remains NaN
+            if(distArr(min_indx) < max_distance) then ! if too far away, don't use
+                if ( (LANDMASK(min_indx) == 1)   .and. &   ! if nearest cell is no land, fcs value remains NaN
+                    ( abs( SNOFCS_back(min_indx) - stn_obs(indx)   ) < gross_thold) ) then 
                     SNOFCS_atObs(indx) = SNOFCS_back(min_indx) 
                     OROGFCS_atObs(indx) = OROG(min_indx)
                     index_back_atObs(indx) = min_indx
                 endif
-             else 
-                 Print*, "SNOW DA:  Warning! distance greater than ",max_distance," km ", distArr(min_indx)
             endif
         end do
     
@@ -665,7 +661,6 @@ MODULE M_DA
             mpiReal_size = MPI_REAL8
         elseif (rsize == 16 ) then 
             mpiReal_size = MPI_REAL16
-        else
             PRINT*," Possible mismatch between Fortran Real ", rsize," and Mpi Real", mpiReal_size
             Stop
         endif
@@ -790,6 +785,7 @@ MODULE M_DA
         ALLOCATE(index_Array(NDIM_In))
         NDIM = 0
         jcounter = 1
+        ! exclude all data if not within lat/lon range, or negative snow depth
         ! separate criteria for tile4 (ptn/root 3) because -180/180 lon falls inside its region
         If(p_tN == 3) then
             Do jndx = 1, NDIM_In

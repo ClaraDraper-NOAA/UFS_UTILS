@@ -95,7 +95,7 @@ CONTAINS
         INTEGER            :: Np_ext, Np_til, p_tN, p_tRank, N_sA, N_sA_Ext, mp_start, mp_end
         INTEGER            :: send_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
         INTEGER            :: mpiReal_size, rsize
-        REAL               :: tmp
+        REAL               :: tmp, gross_thold 
         INTEGER, PARAMETER :: PRINTRANK = 4 
 ! CSD-todo, should be same as in sfcsub. Share properly
         real, parameter :: nodata_val = -9999.9
@@ -229,6 +229,7 @@ CONTAINS
                                          TRIM(y_str)//TRIM(m_str)//TRIM(d_str)//TRIM(h_str)//".nc"
              if (MYRANK==PRINTRANK) PRINT *, 'snowDA: reading GHCN file', trim(ghcnd_inp_file) 
              dim_name = "Site_Id"    
+             ! here: all valid stn obs, within lat/lon box (can be outside of tile though) 
              call Observation_Read_GHCND_Tile_excNaN(p_tN, ghcnd_inp_file, dim_name, &
                         lat_min, lat_max, lon_min, lon_max, & 
                         num_stn, SNDOBS_stn,              &
@@ -245,7 +246,7 @@ CONTAINS
                     PRINT*, "Lon at Stn from rank: ", MYRANK
                     PRINT*, Lon_stn
             endif
-            if (myrank==0) PRINT*,'snowDA: Finished reading station data'
+          PRINT*,'snowDA: read ', num_stn, ' obs on RANK', MYRANK
 
        endif
 
@@ -298,17 +299,22 @@ CONTAINS
         ! Get model states at obs points
         if (num_stn > 0) then ! skip if not reading in station data / no obs were available
             ALLOCATE(SNDFCS_at_stn(num_stn))
-            ALLOCATE(SNDANL_at_stn(num_stn))
             ALLOCATE(OROGFCS_at_stn(num_stn)) 
             ALLOCATE(index_back_atObs(num_stn)) 
+            ALLOCATE(SNDANL_at_stn(num_stn))
             ALLOCATE(array_index_back_atObs(2,num_stn)) 
             ALLOCATE(OmB_innov_at_stn(num_stn)) 
-
-            ! QC: if nearest grid cell is not land, delte observation
+ 
+            ! threshold for gross error check 
+            gross_thold =  obs_tolerance * sqrt(stdev_back_depth**2 + stdev_obsv_stn**2)
+            ! QC: remove non-land obs, and do gross-error check
             Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, & 
-                                RLA, RLO, OROG, Lat_stn, Lon_stn,   &
-                                LENSFC, num_stn, bkgst_srch_rad, SNDFCS, LANDMASK,  &
+                                RLA, RLO, OROG, Lat_stn, Lon_stn, SNDOBS_stn,   &
+                                LENSFC, num_stn, bkgst_srch_rad, SNDFCS, LANDMASK, gross_thold,  &
                                 SNDFCS_at_stn, OROGFCS_at_stn, index_back_atObs )  
+            ! from here, invalid obs have no sndfcs_at_stn = NaN, and index_back_atObs = -1 
+            ! Could speed up below by removing invalid obs
+            ! At least, should add explicit assim_flag.
 
             OmB_innov_at_stn = SNDOBS_stn - SNDFCS_at_stn
 
@@ -336,6 +342,9 @@ CONTAINS
 ! QC steps:
 ! if station elevation >1500, discard stn_obs
 ! is model eleveation > threshold, discard IMS obs * 
+! **GHCN has incomplete station info, and currently we're not reading it in. 
+!   and not doing the station elevation check.
+! Should we be reading it in, and discarding stations with no elevation? 
 
 ! min/max limits on station obs
 ! temperature check on all obs  (later if no temperature data with GHCN?)
@@ -363,10 +372,10 @@ CONTAINS
                 if(num_stn>0) then 
                 ! currently: find station obs in radius, do gross error check, and limit to 50 obs
                 ! QC: gross error check is done in this call.
-                        call nearest_Observations_Locations(RLA(jndx), RLO(jndx),    &
+                        call nearest_Observations_Locations(RLA(jndx), RLO(jndx),                    &
                                         Lat_stn, Lon_stn,  num_stn, obs_srch_rad, max_num_nearStn,   &
-                                        stdev_back_depth, stdev_obsv_stn, obs_tolerance,                 &
-                                        SNDFCS_at_stn, SNDOBS_stn,                                              &
+                                        stdev_back_depth, stdev_obsv_stn,                            &
+                                        SNDFCS_at_stn, SNDOBS_stn,                                   &
                                         index_back_at_nearStn,  num_loc_1) !,      &LENSFC,
                         if (print_deb) print*, "number of stn sndpth obs ", num_loc_1
                 endif         
@@ -374,9 +383,6 @@ CONTAINS
                     (.NOT. IEEE_IS_NAN(SNDFCS(jndx))) .AND. &
                     (.NOT. IEEE_IS_NAN(SND_IMS_at_Grid(jndx))) .AND. &
                     (  SND_IMS_at_Grid(jndx) > (nodata_val + nodata_tol) ) )  THEN  
-                    !(OROG(jndx) <= ims_max_ele) .AND. &
-                    !( .not.( (SWEFCS(jndx) >= SNUP_Array(jndx)) .AND. & 
-                    !   SWE_IMS_at_Grid(jndx) >= SNUP_Array(jndx)) ) ) then
                         num_loc_2 = 1 
                         assim_sncov_thisGridCell = .TRUE.                
                 endif
@@ -506,19 +512,24 @@ CONTAINS
         !call calculate_snow_cover_fraction(LENSFC, SWEANL, VETFCS, nodata_val, nodata_tol, SCFANL)
 
 ! get index for station obs in original array 
-
+ 
+        array_index_back_atObs = -9  
         do jndx = 1, num_stn 
-              array_index_back_atObs(1,jndx) =  index_back_atObs(jndx) / JDIM
+           if   ( index_back_atObs(jndx) > 0. ) then 
+              array_index_back_atObs(1,jndx) =  index_back_atObs(jndx) / JDIM + 1
               array_index_back_atObs(2,jndx) =  mod(index_back_atObs(jndx), JDIM) 
+              if (array_index_back_atObs(2,jndx) ==0 ) array_index_back_atObs(2,jndx) = JDIM
+           endif
         enddo
 
 
 ! station depth from analysis
 ! get analysis at obs locations, to O-A
+        gross_thold = 999999999. ! set to large, so don't filter out any analyses
         if (num_stn > 0 ) then
                 Call Observation_Operator_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, &
-                            RLA, RLO, OROG, Lat_stn, Lon_stn,   &
-                            LENSFC, num_stn, bkgst_srch_rad, SNDANL, LANDMASK, & 
+                            RLA, RLO, OROG, Lat_stn, Lon_stn, SNDOBS_stn,   &
+                            LENSFC, num_stn, bkgst_srch_rad, SNDANL, LANDMASK, gross_thold,  & 
                             SNDANL_at_stn, OROGFCS_at_stn, index_back_atObs )
         endif
 
@@ -526,7 +537,9 @@ CONTAINS
         Write(rank_str, '(I1.1)') (MYRANK+1)
         da_out_file = "./SNOANLOI.tile"//rank_str//".nc"  !
 
+        ! use array_index to detect stn obs not assimilated (later, add an explicit flag)
         call Write_DA_Outputs(da_out_file, IDIM, JDIM, LENSFC, MYRANK, &
+                              RLO, RLA, & 
                               SWEFCS, SWEANL, SNDFCS, SNDANL, LANDMASK,&  
                               SNCOV_IMS, SND_IMS_at_Grid, & 
                               num_stn, Lat_stn, Lon_stn, array_index_back_atObs, & 
@@ -611,6 +624,7 @@ CONTAINS
 
  ! the following code based on write_data() in read_write_data.f90
  Subroutine Write_DA_Outputs(output_file, idim, jdim, lensfc, myrank,   &
+                                 lons_grid, lats_grid, & 
                                  snoforc, snoanl, snwdforc, snwdanal, landmask,  &
                                  SNCOV_IMS, SND_IMS_at_Grid, &
                                  num_stn, Lat_atObs, Lon_atObs, index_stn,OBS_stn, FCS_at_stn, ANL_at_stn )  
@@ -626,7 +640,8 @@ CONTAINS
 
         CHARACTER(LEN=*), Intent(In)      :: output_file
         integer, intent(in)         :: idim, jdim, lensfc, num_stn
-        real, intent(in)            :: snoforc(lensfc), snoanl(lensfc), snwdforc(lensfc), snwdanal(lensfc)
+        real, intent(in)            :: snoforc(lensfc), snoanl(lensfc) , lons_grid(lensfc), lats_grid(lensfc)
+        real, intent(in)            ::  snwdforc(lensfc), snwdanal(lensfc)
         integer, intent(in)         :: landmask(lensfc)
         integer, intent(in)         :: index_stn(2,num_stn)
         Real, intent(in)            :: OBS_stn(num_stn), FCS_at_stn(num_stn), ANL_at_stn(num_stn)
@@ -641,7 +656,7 @@ CONTAINS
         integer                     :: id_x, id_y, id_time
         integer       :: id_swe_forc, id_swe, id_snwdf, id_snwd, id_imssno, id_imscov  
         integer       :: id_latstn, id_lonstn, id_obsstn, id_forcstn, id_analstn, id_landmask
-        integer       :: id_iindex, id_jindex
+        integer       :: id_iindex, id_jindex, id_lon, id_lat
         
         integer                     :: myrank
 
@@ -708,8 +723,22 @@ CONTAINS
         error = nf90_put_att(ncid, id_landmask, "units", "binary")
         call netcdf_err(error, 'DEFINING LandMask UNITS' )
 
+        error = nf90_def_var(ncid, 'Lon', NF90_DOUBLE, dims_3d, id_lon)
+        call netcdf_err(error, 'DEFINING Longitude' )
+        error = nf90_put_att(ncid, id_lon, "long_name", "longitude")
+        call netcdf_err(error, 'DEFINING Lon LONG NAME' )
+        error = nf90_put_att(ncid, id_lon, "units", "degrees East")
+        call netcdf_err(error, 'DEFINING Lon UNITS' )
+
+        error = nf90_def_var(ncid, 'Lat', NF90_DOUBLE, dims_3d, id_lat)
+        call netcdf_err(error, 'DEFINING Lattitude' )
+        error = nf90_put_att(ncid, id_lat, "long_name", "latitude")
+        call netcdf_err(error, 'DEFINING Lat LONG NAME' )
+        error = nf90_put_att(ncid, id_lat, "units", "degrees North")
+        call netcdf_err(error, 'DEFINING Lat UNITS' )
+
         error = nf90_def_var(ncid, 'SWE_Forecast', NF90_DOUBLE, dims_3d, id_swe_forc)
-        call netcdf_err(error, 'DEFINING SWE_Forecast' )
+        call netcdf_err(error, 'DEFINING SWE Forecast' )
         error = nf90_put_att(ncid, id_swe_forc, "long_name", "Forecast Snow Water Equivalent")
         call netcdf_err(error, 'DEFINING SWE Forecast LONG NAME' )
         error = nf90_put_att(ncid, id_swe_forc, "units", "mm")
@@ -830,6 +859,14 @@ CONTAINS
         error = nf90_put_var( ncid, id_landmask, dum2d, dims_strt, dims_end)
         call netcdf_err(error, 'WRITING LandMask RECORD' )
 
+        dum2d = reshape(lons_grid, (/idim,jdim/))
+        error = nf90_put_var( ncid, id_lon, dum2d, dims_strt, dims_end)
+        call netcdf_err(error, 'WRITING Longitude RECORD' )
+
+        dum2d = reshape(lats_grid, (/idim,jdim/))
+        error = nf90_put_var( ncid, id_lat, dum2d, dims_strt, dims_end)
+        call netcdf_err(error, 'WRITING Lattitude RECORD' )
+
         dum2d = reshape(snoforc, (/idim,jdim/))
         error = nf90_put_var( ncid, id_swe_forc, dum2d, dims_strt, dims_end)
         call netcdf_err(error, 'WRITING SWE Forecast RECORD' )
@@ -883,98 +920,6 @@ CONTAINS
     
  End subroutine Write_DA_Outputs
 
- SUBROUTINE Find_Nearest_GridIndices_Parallel(Myrank, NUM_TILES, p_tN, p_tRank, Np_til, &
-                                            num_src, num_tar, RLA_cg, RLO_cg, RLA, RLO, index_ens_atGrid)
-                            
-        IMPLICIT NONE
-        !
-        !USE intrinsic::ieee_arithmetic
-        include "mpif.h"
-        
-        Integer, Intent(In)          :: Myrank, NUM_TILES, p_tN, p_tRank, Np_til, num_src, num_tar
-        Real, Intent(In)                :: RLA_cg(num_src), RLO_cg(num_src), RLA(num_tar), RLO(num_tar)
-        Integer, Intent(Out)         :: index_ens_atGrid(num_tar)
-        Real                        :: RLA_cg_rad(num_src), RLO_cg_rad(num_src)
-        Real                        :: RLA_rad(num_tar), RLO_rad(num_tar)
-        
-        INTEGER                     :: indx, min_indx
-        Real                        :: distArr(num_src), haversinArr(num_src)
-        Real                        :: d_latArr(num_src), d_lonArr(num_src)
-        Real(16), Parameter         :: PI_16 = 4 * atan (1.0_16)        
-        Real(16), Parameter         :: pi_div_180 = PI_16/180.0
-        Real, Parameter                 :: earth_rad = 6371.
-        
-        ! for mpi par
-        INTEGER            :: N_sA, N_sA_Ext, mp_start, mp_end 
-        INTEGER            :: send_proc, rec_proc, rec_stat(MPI_STATUS_SIZE), dest_Aoffset, pindex
-        INTEGER            :: mpiInt_size, isize, IERR
-
-        !Np_til ! num proc. per tile p_tRank ! proc. rank within tile !p_tN  ! tile for proc.
-        N_sA = num_tar / Np_til  ! sub array length per proc
-        N_sA_Ext = num_tar - N_sA * Np_til ! extra grid cells
-        if(p_tRank == 0) then 
-                mp_start = 1
-        else
-                mp_start = p_tRank * N_sA + N_sA_Ext + 1   ! start index of subarray for proc
-        endif
-        mp_end = (p_tRank + 1) * N_sA + N_sA_Ext                ! end index of subarray for proc
-                
-        index_ens_atGrid = -1  
-        ! at each target point compute its distance from source RLA/RLO pairs and find the position of the minimum      
-        RLA_rad =  pi_div_180 * RLA
-        RLO_rad =  pi_div_180 * RLO
-        RLA_cg_rad =  pi_div_180 * RLA_cg
-        RLO_cg_rad =  pi_div_180 * RLO_cg       
-        ! https://en.wikipedia.org/wiki/Haversine_formula
-        Do indx = mp_start, mp_end    ! num_tar 
-                d_latArr = (RLA_rad(indx) - RLA_cg_rad) / 2.
-                d_lonArr = (RLO_rad(indx) - RLO_cg_rad) / 2.
-                haversinArr = sin(d_latArr)**2 + cos(RLA_rad(indx)) * cos(RLA_cg_rad) * sin(d_lonArr)**2
-                WHERE(haversinArr > 1) haversinArr = 1.   ! ensure numerical errors don't make h>1
-                distArr = 2 * earth_rad * asin(sqrt(haversinArr))               
-                min_indx = MINLOC(distArr, dim = 1)  !, MASK=ieee_is_nan(distArr))
-                index_ens_atGrid(indx) = min_indx
-        end do
-
-        isize = SIZEOF(N_sA) 
-        Call MPI_TYPE_SIZE(MPI_INTEGER, mpiInt_size, IERR) 
-        If (isize == 2 ) then 
-                mpiInt_size = MPI_INTEGER2
-        elseif (isize == 4 ) then 
-                mpiInt_size = MPI_INTEGER4
-        elseif (isize == 8 ) then 
-                mpiInt_size = MPI_INTEGER8
-        else
-                PRINT*," Possible mismatch between Fortran Int ", isize," and Mpi Int ", mpiInt_size
-                Stop
-        endif
-    
-        if (MYRANK > (NUM_TILES - 1) ) then
-                call MPI_SEND(index_ens_atGrid(mp_start:mp_end), N_sA, mpiInt_size, p_tN,   &
-                                                MYRANK*1000, MPI_COMM_WORLD, IERR)
-        else !if (MYRANK == p_tN ) then  
-                Do pindex =  1, (Np_til - 1)   ! sender proc index within tile group
-                        dest_Aoffset = pindex * N_sA + N_sA_Ext + 1   ! dest array offset
-                        send_proc = MYRANK +  pindex * NUM_TILES
-                        call MPI_RECV(index_ens_atGrid(dest_Aoffset:dest_Aoffset+N_sA-1), N_sA, mpiInt_size, send_proc, &
-                                                send_proc*1000, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-                enddo
-        endif
-    !ToDO: better way to do this?
-        ! now share the whole array
-        if (MYRANK < NUM_TILES ) then   !if (MYRANK == p_tN ) then      
-                Do pindex =  1, (Np_til - 1)   ! receiving proc index within tile group
-                        rec_proc = MYRANK +  pindex * NUM_TILES
-                        call MPI_SEND(index_ens_atGrid, num_tar, mpiInt_size, rec_proc, MYRANK*100, MPI_COMM_WORLD, IERR)
-                enddo
-        else 
-                call MPI_RECV(index_ens_atGrid, num_tar, mpiInt_size, p_tN, p_tN*100, MPI_COMM_WORLD, MPI_STATUS_IGNORE, IERR)
-        endif
-             
-    RETURN
-        
- END SUBROUTINE Find_Nearest_GridIndices_Parallel
-     
  SUBROUTINE READ_Forecast_Data_atPath(forc_inp_path, veg_type_landice, LENSFC, SWEFCS, SNDFCS, VETFCS, LANDMASK)  
 !**
     
