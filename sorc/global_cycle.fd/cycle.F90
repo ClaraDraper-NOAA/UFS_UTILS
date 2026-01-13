@@ -237,9 +237,6 @@
  !!   - SMC  .. Total soil moisture (LSOIL layrs)
  !!   - AIS  .. Sea ice mask (0 or 1)
  !!   - CNP  .. Canopy water content
- !!   - CV   .. Convective cloud cover
- !!   - CVB  .. Convective cloud base
- !!   - CVT  .. Convective cloud top
  !!   - SLI  .. LAND/SEA/SEA-ICE mask. (1/0/2 respectively)
  !!   - VEG  .. Vegetation cover
  !!   - SOT  .. Soil type
@@ -370,8 +367,7 @@
  REAL                :: AISFCS(LENSFC), F10M(LENSFC)
  REAL                :: VEGFCS(LENSFC), VETFCS(LENSFC)
  REAL                :: SOTFCS(LENSFC), ALFFCS(LENSFC,2)
- REAL                :: CVFCS(LENSFC), CVTFCS(LENSFC)
- REAL                :: CVBFCS(LENSFC), TPRCP(LENSFC)
+ REAL                :: TPRCP(LENSFC)
  REAL                :: SRFLAG(LENSFC), SNDFCS(LENSFC)
  REAL                :: SLCFCS(LENSFC,LSOIL), VMXFCS(LENSFC)
  REAL                :: VMNFCS(LENSFC), T2M(LENSFC)
@@ -531,7 +527,7 @@ ENDIF
  CALL READ_DATA(LSOIL,LENSFC,DO_NSST,IS_NOAHMP=IS_NOAHMP, &
                 TSFFCS=TSFFCS,SMCFCS=SMCFCS,   &
                 SWEFCS=SWEFCS,STCFCS=STCFCS,TG3FCS=TG3FCS,ZORFCS=ZORFCS,  &
-                CVFCS=CVFCS,  CVBFCS=CVBFCS,CVTFCS=CVTFCS,ALBFCS=ALBFCS,  &
+                ALBFCS=ALBFCS,  &
                 VEGFCS=VEGFCS,SLIFCS=SLIFCS,CNPFCS=CNPFCS,F10M=F10M    ,  &
                 VETFCS=VETFCS,SOTFCS=SOTFCS,ALFFCS=ALFFCS,USTAR=USTAR  ,  &
                 FMM=FMM      ,FHH=FHH      ,SIHFCS=SIHFCS,SICFCS=SICFCS,  &
@@ -664,8 +660,7 @@ ENDIF
                TSFFCS,SWEFCS,ZORFCS,ALBFCS,TG3FCS,       &
                CNPFCS,SMCFCS,STCFCS,SLIFCS,AISFCS,       &
                VEGFCS,VETFCS,SOTFCS,SOCFCS,ALFFCS,       &
-               CVFCS,CVBFCS,CVTFCS,MYRANK,num_threads, NLUNIT,        &
-               SZ_NML, INPUT_NML_FILE,                   &
+             MYRANK,num_threads, NLUNIT,        &
                min_ice, &
                IALB,ISOT,IVEGSRC,TILE_NUM,I_INDEX,J_INDEX)
 
