@@ -58,7 +58,7 @@ export DONST="YES"
 export use_ufo=.true.
 
 export VERBOSE=YES
-export CYCLVARS=FSNOL=-2.,FSNOS=99999.,
+export CYCLVARS=FSNOL=99999.,FSNOS=99999.,
 
 export PGMOUT='out'
 export PGMERR='err'

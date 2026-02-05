@@ -46,7 +46,7 @@ export FNTSFA=${FNTSFA:-$DMPDIR/${CDUMP}.${PDY}/${cyc}/${COMPONENT}/${CDUMP}.t${
 export FNSNOA=${FNSNOA:-$DMPDIR/${CDUMP}.${PDY}/${cyc}/${COMPONENT}/${CDUMP}.t${cyc}z.snogrb_t1534.3072.1536}
 export FNACNA=${FNACNA:-$DMPDIR/${CDUMP}.${PDY}/${cyc}/${COMPONENT}/${CDUMP}.t${cyc}z.seaice.5min.blend.grb}
 
-export CYCLVARS=${CYCLVARS:-"FSNOL=-2.,FSNOS=99999.,"}
+export CYCLVARS=${CYCLVARS:-"FSNOL=99999.,FSNOS=99999.,"}
 
 if [ $DONST = "YES" ]; then
     export NST_FILE=${NST_FILE:-$COMOUT/dtfanl.nc}
